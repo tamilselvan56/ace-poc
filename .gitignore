@@ -1,0 +1,41 @@
+# ACE runtime work directories
+ace-workdir/
+
+# ACE Toolkit generated metadata
+workspace/.metadata/
+
+# Generated BAR files
+bars/*.bar
+
+# Runtime logs
+logs/
+*.log
+*.trace
+*.lock
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+# Windows files
+Thumbs.db
+Desktop.ini
+
+# IDE settings
+.vscode/
+.idea/
+
+# Java generated files
+target/
+build/
+bin/
+*.class
+
+# Secrets and certificates
+*.jks
+*.p12
+*.pfx
+*.pem
+*.key
+.env
