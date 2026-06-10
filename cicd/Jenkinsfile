@@ -1,0 +1,59 @@
+pipeline {
+    agent { label 'windows-ace' }
+
+    options {
+        skipDefaultCheckout(true)
+    }
+
+    environment {
+        ACE_PROJECT   = 'ace-poc-app'
+        ACE_WORKSPACE = "${WORKSPACE}\\workspace"
+        BAR_DIR       = "${WORKSPACE}\\bars"
+        BAR_FILE      = "${WORKSPACE}\\bars\\ace-poc-app_${BUILD_NUMBER}.bar"
+        ACE_PROFILE   = 'C:\\Program Files\\IBM\\ACE\\13.0.7.0\\server\\bin\\mqsiprofile.cmd'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Verify ACE CLI') {
+            steps {
+                bat '''
+                    call "%ACE_PROFILE%"
+                    where ibmint
+                    ibmint --help
+                '''
+            }
+        }
+
+        stage('Package BAR') {
+            steps {
+                bat '''
+                    call "%ACE_PROFILE%"
+
+                    if not exist "%BAR_DIR%" mkdir "%BAR_DIR%"
+
+                    ibmint package ^
+                      --input-path "%ACE_WORKSPACE%" ^
+                      --output-bar-file "%BAR_FILE%" ^
+                      --project "%ACE_PROJECT%"
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            archiveArtifacts artifacts: 'bars/*.bar',
+                             fingerprint: true
+        }
+
+        failure {
+            echo 'Pipeline failed. Check the Console Output.'
+        }
+    }
+}
