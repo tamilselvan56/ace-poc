@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Account Create Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "accountId",
+    "customerId",
+    "accountType",
+    "currency",
+    "channel"
+  ],
+  "properties": {
+    "accountId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 20,
+      "pattern": "^[A-Za-z0-9]+$"
+    },
+    "customerId": {
+      "type": "string",
+      "pattern": "^[A-Z]{2}[0-9]{8}$"
+    },
+    "accountType": {
+      "type": "string",
+      "enum": [
+        "SAVINGS",
+        "CURRENT",
+        "SALARY",
+        "LOAN"
+      ]
+    },
+    "currency": {
+      "type": "string",
+      "enum": [
+        "INR",
+        "USD",
+        "EUR",
+        "GBP"
+      ]
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "MOBILE",
+        "INTERNET",
+        "BRANCH",
+        "API"
+      ],
+      "default": "API"
+    },
+    "initialDeposit": {
+      "type": "number",
+      "minimum": 0
+    },
+    "requestTimestamp": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

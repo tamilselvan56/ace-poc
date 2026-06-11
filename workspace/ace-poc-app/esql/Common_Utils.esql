@@ -1,0 +1,103 @@
+
+
+BROKER SCHEMA esql
+
+
+CREATE COMPUTE MODULE Common_Utils
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		-- CALL CopyMessageHeaders();
+		-- CALL CopyEntireMessage();
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders()
+	BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER;
+		SET J = CARDINALITY(InputRoot.*[]);
+
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage()
+	BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+
+	CREATE FUNCTION GetCurrentTimestamp() RETURNS CHARACTER
+	BEGIN
+		RETURN CAST(CURRENT_GMTTIMESTAMP AS CHARACTER);
+	END;
+
+	CREATE FUNCTION GetDefaultEnvironment() RETURNS CHARACTER
+	BEGIN
+		RETURN 'DEV';
+	END;
+
+	CREATE FUNCTION GetServiceName() RETURNS CHARACTER
+	BEGIN
+		RETURN 'ace-poc-app';
+	END;
+
+	CREATE FUNCTION GetDefaultChannel(IN inputChannel CHARACTER) RETURNS CHARACTER
+	BEGIN
+		IF inputChannel IS NULL OR TRIM(inputChannel) = '' THEN
+			RETURN 'API';
+		END IF;
+
+		RETURN UPPER(TRIM(inputChannel));
+	END;
+
+	CREATE FUNCTION IsValidCurrency(IN inputCurrency CHARACTER) RETURNS BOOLEAN
+	BEGIN
+		DECLARE currency CHARACTER UPPER(TRIM(inputCurrency));
+
+		IF currency = 'INR'
+			OR currency = 'USD'
+			OR currency = 'EUR'
+			OR currency = 'GBP' THEN
+			RETURN TRUE;
+		END IF;
+
+		RETURN FALSE;
+	END;
+
+	CREATE FUNCTION IsValidChannel(IN inputChannel CHARACTER) RETURNS BOOLEAN
+	BEGIN
+		DECLARE channel CHARACTER UPPER(TRIM(inputChannel));
+
+		IF channel = 'MOBILE'
+			OR channel = 'INTERNET'
+			OR channel = 'BRANCH'
+			OR channel = 'API' THEN
+			RETURN TRUE;
+		END IF;
+
+		RETURN FALSE;
+	END;
+
+	CREATE FUNCTION MaskAccountId(IN accountId CHARACTER) RETURNS CHARACTER
+	BEGIN
+		DECLARE len INTEGER LENGTH(accountId);
+
+		IF accountId IS NULL OR len <= 4 THEN
+			RETURN '****';
+		END IF;
+
+		RETURN '****' || SUBSTRING(accountId FROM len - 3 FOR 4);
+	END;
+
+	CREATE PROCEDURE SetJsonResponseHeaders(
+	INOUT responseHeader REFERENCE,
+	IN correlationId CHARACTER
+	)
+	BEGIN
+		SET responseHeader."Content-Type" = 'application/json; charset=utf-8';
+		SET responseHeader."X-Correlation-ID" = correlationId;
+		SET responseHeader."X-Service-Name" = 'ace-poc-app';
+	END;
+END MODULE;

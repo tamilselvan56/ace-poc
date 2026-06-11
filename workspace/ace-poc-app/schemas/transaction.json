@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Transaction Request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "transactionId",
+    "accountId",
+    "amount",
+    "currency",
+    "transactionType",
+    "channel"
+  ],
+  "properties": {
+    "transactionId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 30,
+      "pattern": "^[A-Za-z0-9-]+$"
+    },
+    "accountId": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 20,
+      "pattern": "^[A-Za-z0-9]+$"
+    },
+    "amount": {
+      "type": "number",
+      "minimum": 0.01,
+      "maximum": 9999999.99
+    },
+    "currency": {
+      "type": "string",
+      "enum": [
+        "INR",
+        "USD",
+        "EUR",
+        "GBP"
+      ]
+    },
+    "transactionType": {
+      "type": "string",
+      "enum": [
+        "CREDIT",
+        "DEBIT",
+        "TRANSFER"
+      ]
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "MOBILE",
+        "INTERNET",
+        "BRANCH",
+        "API"
+      ],
+      "default": "API"
+    },
+    "transactionDate": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "remarks": {
+      "type": "string",
+      "maxLength": 250
+    }
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Standard Error Response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "correlationId",
+    "timestamp",
+    "errorCode",
+    "message"
+  ],
+  "properties": {
+    "correlationId": {
+      "type": "string"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "errorCode": {
+      "type": "string"
+    },
+    "message": {
+      "type": "string"
+    },
+    "detail": {
+      "type": "string"
+    },
+    "httpStatus": {
+      "type": "integer"
+    },
+    "flowName": {
+      "type": "string"
+    },
+    "nodeName": {
+      "type": "string"
+    }
+  }
+}

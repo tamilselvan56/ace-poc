@@ -1,0 +1,114 @@
+BROKER SCHEMA esql
+
+CREATE COMPUTE MODULE Error_Handler
+
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		-- CALL CopyMessageHeaders();
+		-- CALL CopyEntireMessage();
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders() 
+	BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER;
+
+		SET J = CARDINALITY(InputRoot.*[]);
+
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() 
+	BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+
+	CREATE FUNCTION GetCurrentTimestamp() RETURNS CHARACTER
+	BEGIN
+		RETURN CAST(CURRENT_GMTTIMESTAMP AS CHARACTER);
+	END;
+
+	CREATE PROCEDURE BuildErrorResponse(
+		INOUT outputRootRef REFERENCE,
+		INOUT outputLocalEnvRef REFERENCE,
+		IN httpStatus INTEGER,
+		IN correlationId CHARACTER,
+		IN errorCode CHARACTER,
+		IN errorMessage CHARACTER,
+		IN errorDetail CHARACTER,
+		IN flowName CHARACTER,
+		IN nodeName CHARACTER
+	)
+	BEGIN
+		SET outputLocalEnvRef.Destination.HTTP.ReplyStatusCode = httpStatus;
+
+		SET outputRootRef.HTTPResponseHeader."Content-Type" =
+			'application/json; charset=utf-8';
+
+		SET outputRootRef.HTTPResponseHeader."X-Correlation-ID" =
+			correlationId;
+
+		SET outputRootRef.HTTPResponseHeader."X-Error-Code" =
+			errorCode;
+
+		CREATE LASTCHILD OF outputRootRef DOMAIN('JSON') NAME 'JSON';
+
+		SET outputRootRef.JSON.Data.correlationId = correlationId;
+		SET outputRootRef.JSON.Data.timestamp = GetCurrentTimestamp();
+		SET outputRootRef.JSON.Data.errorCode = errorCode;
+		SET outputRootRef.JSON.Data.message = errorMessage;
+		SET outputRootRef.JSON.Data.detail = errorDetail;
+		SET outputRootRef.JSON.Data.httpStatus = httpStatus;
+		SET outputRootRef.JSON.Data.flowName = flowName;
+		SET outputRootRef.JSON.Data.nodeName = nodeName;
+	END;
+
+	CREATE PROCEDURE BuildValidationError(
+		INOUT outputRootRef REFERENCE,
+		INOUT outputLocalEnvRef REFERENCE,
+		IN correlationId CHARACTER,
+		IN detail CHARACTER,
+		IN flowName CHARACTER,
+		IN nodeName CHARACTER
+	)
+	BEGIN
+		CALL BuildErrorResponse(
+			outputRootRef,
+			outputLocalEnvRef,
+			400,
+			correlationId,
+			'ERR_001',
+			'Validation failed',
+			detail,
+			flowName,
+			nodeName
+		);
+	END;
+
+	CREATE PROCEDURE BuildInternalError(
+		INOUT outputRootRef REFERENCE,
+		INOUT outputLocalEnvRef REFERENCE,
+		IN correlationId CHARACTER,
+		IN detail CHARACTER,
+		IN flowName CHARACTER,
+		IN nodeName CHARACTER
+	)
+	BEGIN
+		CALL BuildErrorResponse(
+			outputRootRef,
+			outputLocalEnvRef,
+			500,
+			correlationId,
+			'ERR_999',
+			'Internal ACE error',
+			detail,
+			flowName,
+			nodeName
+		);
+	END;
+
+END MODULE;

@@ -1,0 +1,7 @@
+ACEPOCSERVER is running
+ACE administration opens on port 7600
+ACEPOCQM shows Running
+HealthCheck BAR is deployed
+GET /api/v1/health returns HTTP 200
+Git commit exists
+Jenkins skeleton exists
