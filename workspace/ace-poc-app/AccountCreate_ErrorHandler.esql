@@ -1,0 +1,52 @@
+
+
+CREATE COMPUTE MODULE AccountCreate_ErrorHandler
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		DECLARE correlationId CHARACTER GetCorrelationId();
+		SET OutputRoot.Properties = InputRoot.Properties;
+		SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 500;
+		
+		 SET OutputRoot.HTTPResponseHeader."Content-Type" =
+            'application/json; charset=utf-8';
+
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" =
+            correlationId;
+
+        SET OutputRoot.HTTPResponseHeader."X-Error-Code" =
+            'ERR_ACC_500';
+            
+         CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+         
+         SET OutputRoot.JSON.Data.status = 'FAILED';
+         SET OutputRoot.JSON.Data.correlationId = correlationId;
+         SET OutputRoot.JSON.Data.timeStamp = CAST(CURRENT_GMTTIMESTAMP AS CHARACTER);
+         SET OutputRoot.JSON.Data.errorCode = 'ERR_ACC_500';
+         SET OutputRoot.JSON.Data.message = 'Internel error occured';
+         SET OutputRoot.JSON.Data.details = 'unexpected ACE processing error';
+         SET OutputRoot.JSON.Data.httpStatus = 500;
+         SET OutputRoot.JSON.Data.flowName = 'AccountCreateFlow';
+         SET OutputRoot.JSON.Data.nodeName = 'AccountCreate_ErrorHandler_Compute';
+         
+		RETURN TRUE;
+	END;
+	
+	CREATE FUNCTION GetCorrelationId ( ) RETURNS CHARACTER
+	BEGIN
+		DECLARE correlationId CHARACTER '';
+
+        IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+            SET correlationId =
+                CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+        ELSEIF EXISTS(InputRoot.HTTPInputHeader."x-correlation-id"[]) THEN
+            SET correlationId =
+                CAST(InputRoot.HTTPInputHeader."x-correlation-id" AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER);
+        END IF;
+		RETURN correlationId;
+	END;
+
+	
+END MODULE;

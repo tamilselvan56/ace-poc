@@ -1,0 +1,414 @@
+
+
+CREATE COMPUTE MODULE AccountCreate_Compute
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		DECLARE flowName CHARACTER 'AccountCreateFlow';
+		DECLARE nodeName CHARACTER 'AccountCreate_Compute';
+		
+		DECLARE correlationId CHARACTER GetCorrelationId();
+		
+		DECLARE accountId CHARACTER '';
+		DECLARE customerId CHARACTER '';
+		DECLARE accountType CHARACTER '';
+		DECLARE currency CHARACTER '';
+		DECLARE channel CHARACTER '';
+		
+		IF NOT EXISTS(InputRoot.JSON.Data[]) THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_001',
+				'Invalid request body',
+				'Request body must be valid JSON.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+		END IF;
+		
+		SET accountId = TRIM(COALESCE(CAST(InputRoot.JSON.Data.accountId AS CHARACTER), ''));
+		SET customerId = TRIM(COALESCE(CAST(InputRoot.JSON.Data.customerId AS CHARACTER), ''));
+		SET accountType = UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.accountType AS CHARACTER), '')));
+		SET currency = UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.currency AS CHARACTER), '')));
+		SET channel = UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.channel AS CHARACTER), '')));
+		
+		
+		IF accountId = '' THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_002',
+				'Validation Failed',
+				'AccountId is required.',
+				flowName,
+				nodeName
+			);
+				
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF LENGTH(accountId) < 8 OR LENGTH(accountId) > 20 THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_003',
+				'Validation Failed',
+				'AccountId length must be between 8 and 20 characters.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF NOT IsAlphaNumeric(accountId) THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_004',
+				'Validation Failed',
+				'accountId must contain only letters and numbers.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF customerId = '' THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_005',
+				'Validation Failed',
+				'CustomerId required.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF NOT IsValidCustomerId(customerId) THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_006',
+				'Validation Failed',
+				'customerId must follow format. eg:CU12345678',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF accountType = '' THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_007',
+				'Validation Failed',
+				'AccountType  required.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF NOT IsValidAccountType(accountType) THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_008',
+				'Validation Failed',
+				'AccountType must be SAVINGS, CURRENT, SALARY, LOAN.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF currency = '' THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_009',
+				'Validation Failed',
+				'Currency is required.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF NOT IsValidCurrency(currency) THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_010',
+				'Validation Failed',
+				'Currency must be INR, USD, EUR, GBP.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		IF channel = '' THEN
+			SET channel = 'API';
+			
+		END IF;
+		
+		IF NOT IsValidChannel(channel) THEN
+			CALL BuildErrorResponse(
+				400,
+				correlationId,
+				'ERR_ACC_011',
+				'Validation Failed',
+				'Channel must be MOBILE, INTERNET, BRANCH, OR API.',
+				flowName,
+				nodeName
+			);
+			RETURN TRUE;
+			
+		END IF;
+		
+		CALL BuildSuccessResponse(
+			correlationId,
+			accountId,
+			customerId,
+			accountType,
+			currency,
+			channel,
+			flowName
+		);
+		
+		RETURN TRUE;
+		
+		
+	END;
+	
+	CREATE PROCEDURE BuildSuccessResponse(
+		IN correlationId CHARACTER,
+        IN accountId CHARACTER,
+        IN customerId CHARACTER,
+        IN accountType CHARACTER,
+        IN currency CHARACTER,
+        IN channel CHARACTER,
+        IN flowName CHARACTER
+	)
+     
+    BEGIN
+    	SET OutputRoot.Properties = InputRoot.Properties;
+    	SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 201;
+    	SET OutputRoot.HTTPResponseHeader."Content-Type" = 'application/json; charset=utf-8';
+    	SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+    	SET OutputRoot.HTTPResponseHeader."X-Service-Name" = 'ace-poc-app';
+    	
+    	CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+    	
+    	SET OutputRoot.JSON.Data.status = 'SUCCESS';
+        SET OutputRoot.JSON.Data.message = 'Account created successfully';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.accountId = accountId;
+        SET OutputRoot.JSON.Data.customerId = customerId;
+        SET OutputRoot.JSON.Data.accountType = accountType;
+        SET OutputRoot.JSON.Data.currency = currency;
+        SET OutputRoot.JSON.Data.channel = channel;
+        SET OutputRoot.JSON.Data.accountStatus = 'ACTIVE';
+        SET OutputRoot.JSON.Data.environment = 'DEV';
+        SET OutputRoot.JSON.Data.service = 'ace-poc-app';
+        SET OutputRoot.JSON.Data.flowName = flowName;
+        SET OutputRoot.JSON.Data.createdAt = CAST(CURRENT_GMTTIMESTAMP AS CHARACTER);
+        
+    END;
+    
+    CREATE PROCEDURE BuildErrorResponse (
+    	IN httpStatus INTEGER,
+        IN correlationId CHARACTER,
+        IN errorCode CHARACTER,
+        IN errorMessage CHARACTER,
+        IN errorDetail CHARACTER,
+        IN flowName CHARACTER,
+        IN nodeName CHARACTER
+        )
+    BEGIN
+    	SET OutputRoot.Properties = InputRoot.Properties;
+    	SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
+    	SET OutputRoot.HTTPResponseHeader."Content-Type" = 'application/json; charset=utf-8';
+    	SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+    	SET OutputRoot.HTTPResponseHeader."X-Error-Code" = errorCode;
+    	
+    	CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+    	
+    	SET OutputRoot.JSON.Data.status = 'FAILED';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.timestamp =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER);
+        SET OutputRoot.JSON.Data.errorCode = errorCode;
+        SET OutputRoot.JSON.Data.message = errorMessage;
+        SET OutputRoot.JSON.Data.detail = errorDetail;
+        SET OutputRoot.JSON.Data.httpStatus = httpStatus;
+        SET OutputRoot.JSON.Data.flowName = flowName;
+        SET OutputRoot.JSON.Data.nodeName = nodeName;
+        
+        
+    	
+    END;
+    
+    
+    CREATE FUNCTION GetCorrelationId() RETURNS CHARACTER
+    BEGIN
+    	DECLARE correlationId CHARACTER;
+    	IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+    		SET correlationId = CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+    	ELSEIF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+    		SET correlationId = CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+    	ELSE
+    		SET correlationId = 'ACE-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER);
+    	END IF;
+    	
+    	RETURN correlationId;
+    END;
+    
+    
+    CREATE FUNCTION IsAlphaNumeric(IN inputValue CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        DECLARE i INTEGER 1;
+        DECLARE oneChar CHARACTER '';
+        DECLARE allowedChars CHARACTER
+            'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+        IF inputValue IS NULL OR inputValue = '' THEN
+            RETURN FALSE;
+        END IF;
+
+        WHILE i <= LENGTH(inputValue) DO
+            SET oneChar = SUBSTRING(inputValue FROM i FOR 1);
+
+            IF POSITION(oneChar IN allowedChars) = 0 THEN
+                RETURN FALSE;
+            END IF;
+
+            SET i = i + 1;
+        END WHILE;
+
+        RETURN TRUE;
+    END;
+    
+    CREATE FUNCTION IsValidCustomerId(IN customerId CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        DECLARE prefix CHARACTER '';
+        DECLARE numberPart CHARACTER '';
+
+        IF customerId IS NULL OR LENGTH(customerId) <> 10 THEN
+            RETURN FALSE;
+        END IF;
+
+        SET prefix = SUBSTRING(customerId FROM 1 FOR 2);
+        SET numberPart = SUBSTRING(customerId FROM 3 FOR 8);
+
+        IF NOT IsUppercaseLetters(prefix) THEN
+            RETURN FALSE;
+        END IF;
+
+        IF NOT IsDigits(numberPart) THEN
+            RETURN FALSE;
+        END IF;
+
+        RETURN TRUE;
+    END;
+    
+    CREATE FUNCTION  IsUppercaseLetters(IN inputValue CHARACTER ) RETURNS BOOLEAN
+    BEGIN
+    	DECLARE i INTEGER 1;
+    	DECLARE oneChar CHARACTER '';
+    	DECLARE allowedChars CHARACTER 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    	
+    	IF inputValue IS NULL OR inputValue = '' THEN
+    		RETURN FALSE;
+    		
+    	END IF;
+    	
+    	WHILE i <= LENGTH(inputValue) DO
+    		SET oneChar = SUBSTRING(inputValue FROM i FOR 1);
+    		IF POSITION(oneChar IN allowedChars) = 0 THEN
+    			RETURN FALSE;
+    			
+    		END IF;
+    		SET i = i + 1;
+    	END WHILE;
+    	
+    	RETURN TRUE;
+    END;
+    
+    CREATE FUNCTION IsDigits(IN inputValue CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        DECLARE i INTEGER 1;
+        DECLARE oneChar CHARACTER '';
+        DECLARE allowedChars CHARACTER '0123456789';
+
+        IF inputValue IS NULL OR inputValue = '' THEN
+            RETURN FALSE;
+        END IF;
+
+        WHILE i <= LENGTH(inputValue) DO
+            SET oneChar = SUBSTRING(inputValue FROM i FOR 1);
+
+            IF POSITION(oneChar IN allowedChars) = 0 THEN
+                RETURN FALSE;
+            END IF;
+
+            SET i = i + 1;
+        END WHILE;
+
+        RETURN TRUE;
+    END;
+    
+    CREATE FUNCTION IsValidAccountType(IN accountType CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        IF accountType = 'SAVINGS'
+           OR accountType = 'CURRENT'
+           OR accountType = 'SALARY'
+           OR accountType = 'LOAN' THEN
+            RETURN TRUE;
+        END IF;
+
+        RETURN FALSE;
+    END;
+    
+    CREATE FUNCTION IsValidCurrency(IN currency CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        IF currency = 'INR'
+           OR currency = 'USD'
+           OR currency = 'EUR'
+           OR currency = 'GBP' THEN
+            RETURN TRUE;
+        END IF;
+
+        RETURN FALSE;
+    END;
+    
+    CREATE FUNCTION IsValidChannel(IN channel CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        IF channel = 'MOBILE'
+           OR channel = 'INTERNET'
+           OR channel = 'BRANCH'
+           OR channel = 'API' THEN
+            RETURN TRUE;
+        END IF;
+
+        RETURN FALSE;
+    END;
+     
+     
+
+	
+END MODULE;
