@@ -1,0 +1,53 @@
+
+CREATE COMPUTE MODULE CBR_Reply_Compute
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        DECLARE messageType CHARACTER '';
+        DECLARE targetQueue CHARACTER '';
+
+        IF EXISTS(InputLocalEnvironment.Variable.correlationId[]) THEN
+            SET correlationId =
+                CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        IF EXISTS(InputLocalEnvironment.Variable.messageType[]) THEN
+            SET messageType =
+                CAST(InputLocalEnvironment.Variable.messageType AS CHARACTER);
+        END IF;
+
+        IF EXISTS(InputLocalEnvironment.Variable.targetQueue[]) THEN
+            SET targetQueue =
+                CAST(InputLocalEnvironment.Variable.targetQueue AS CHARACTER);
+        END IF;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 202;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type" =
+            'application/json; charset=utf-8';
+
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" =
+            correlationId;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.status = 'ACCEPTED';
+        SET OutputRoot.JSON.Data.message = 'Message routed to MQ successfully';
+        SET OutputRoot.JSON.Data.messageType = messageType;
+        SET OutputRoot.JSON.Data.targetQueue = targetQueue;
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.flowName = 'ContentBasedRoutingFlow';
+
+        SET OutputRoot.JSON.Data.timestamp =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        RETURN TRUE;
+    END;
+
+END MODULE;

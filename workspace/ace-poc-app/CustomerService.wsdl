@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:tns="http://company.com/acepoc/customer" xmlns:xsd="http://www.w3.org/2001/XMLSchema" name="CustomerService" targetNamespace="http://company.com/acepoc/customer">
+  <documentation>
+    <appinfo source="WMQI_APPINFO">
+      <MRWSDLAppInfo imported="true">
+        <generatedXSD location="CustomerService_InlineSchema1.xsd"/>
+        <binding hasEncoding="false" imported="true" name="CustomerServiceBinding" originalBindingStyle="document"/>
+      </MRWSDLAppInfo>
+    </appinfo>
+  </documentation>
+      
+  <types>
+            
+            
+    <xsd:schema xmlns:ibmSchExtn="http://www.ibm.com/schema/extensions" elementFormDefault="qualified" targetNamespace="http://company.com/acepoc/customer">
+      
+      <xsd:include schemaLocation="CustomerService_InlineSchema1.xsd"/>
+    </xsd:schema>
+        
+  </types>
+      
+  <message name="GetCustomerDetailsRequestMessage">
+            
+    <part element="tns:GetCustomerDetailsRequest" name="parameters"/>
+        
+  </message>
+      
+  <message name="GetCustomerDetailsResponseMessage">
+            
+    <part element="tns:GetCustomerDetailsResponse" name="parameters"/>
+        
+  </message>
+      
+  <portType name="CustomerServicePortType">
+            
+    <operation name="GetCustomerDetails">
+                  
+      <input message="tns:GetCustomerDetailsRequestMessage"/>
+                  
+      <output message="tns:GetCustomerDetailsResponseMessage"/>
+              
+    </operation>
+        
+  </portType>
+      
+  <binding name="CustomerServiceBinding" type="tns:CustomerServicePortType">
+            
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+            
+    <operation name="GetCustomerDetails">
+                  
+      <soap:operation soapAction="GetCustomerDetails"/>
+                  
+      <input>
+                        
+        <soap:body use="literal"/>
+                    
+      </input>
+                  
+      <output>
+                        
+        <soap:body use="literal"/>
+                    
+      </output>
+              
+    </operation>
+        
+  </binding>
+      
+  <service name="CustomerService">
+            
+    <port binding="tns:CustomerServiceBinding" name="CustomerServicePort">
+                  
+      <soap:address location="http://localhost:7800/CustomerService"/>
+              
+    </port>
+        
+  </service>
+  
+</definitions>

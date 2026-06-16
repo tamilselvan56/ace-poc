@@ -1,0 +1,22 @@
+
+
+Importing file: C:\ACEPOC\workspace\ace-poc-app\CustomerService.wsdl
+
+The WSDL import will proceed with bindings CustomerServiceBinding.
+Creating wsdl schema document for file:///C:/ACEPOC/workspace/ace-poc-app/CustomerService.wsdl.
+Parsing wsdl binding {http://company.com/acepoc/customer}CustomerServiceBinding.
+Parsing wsdl binding input GetCustomerDetails.
+Parsing wsdl binding output GetCustomerDetails.
+Processing doc style for operation GetCustomerDetails.
+Populating WSDL schema CustomerService.xsd.
+Creating file CustomerService.xsd in the workspace.
+Creating file CustomerService_InlineSchema1.xsd in the workspace.
+Copying source WSDL CustomerService.wsdl to CustomerService.wsdl.
+
+Elapsed time processing this message definition file: 0.158 seconds
+Number of warnings for this message definition file: 0
+
+
+Number of files processed: 1
+
+

@@ -1,0 +1,113 @@
+
+CREATE COMPUTE MODULE MQPubSub_Compute
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		DECLARE correlationId CHARACTER '';
+		DECLARE eventType CHARACTER '';
+		DECLARE sourceSystem CHARACTER '';
+
+		SET correlationId = GetCorrelationId();
+
+		IF NOT EXISTS(InputRoot.JSON.Data[]) THEN
+			CALL BuildErrorResponse(
+			400, correlationId,
+			'ERR_PUB_001', 'Invalid request body',
+			'Request body must be valid JSON.'
+			);
+			RETURN TRUE;
+		END IF;
+
+		SET eventType =
+		UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.eventType AS CHARACTER), '')));
+
+		SET sourceSystem =
+		TRIM(COALESCE(CAST(InputRoot.JSON.Data.sourceSystem AS CHARACTER), 'ACE-POC'));
+
+		IF eventType = '' THEN
+			CALL BuildErrorResponse(
+			400, correlationId,
+			'ERR_PUB_002', 'Validation failed',
+			'eventType is required.'
+			);
+			RETURN TRUE;
+		END IF;
+
+		SET OutputRoot.Properties = InputRoot.Properties;
+		CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+		-- FIX: Clean timestamp using FORMAT clause
+		SET OutputRoot.JSON.Data.eventId =
+		'EVT-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+		SET OutputRoot.JSON.Data.eventType = eventType;
+		SET OutputRoot.JSON.Data.sourceSystem = sourceSystem;
+		SET OutputRoot.JSON.Data.correlationId = correlationId;
+		SET OutputRoot.JSON.Data.status = 'PUBLISHED';
+
+		SET OutputRoot.JSON.Data.timestamp =
+		CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+		SET OutputRoot.JSON.Data.originalPayload = InputRoot.JSON.Data;
+
+		RETURN TRUE;
+	END;
+
+	CREATE FUNCTION GetCorrelationId() RETURNS CHARACTER
+	BEGIN
+		DECLARE correlationId CHARACTER '';
+		IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+			SET correlationId =
+			CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+		ELSE
+			SET correlationId = 'ACE-' ||
+			CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+		END IF;
+		RETURN correlationId;
+	END;
+
+	CREATE PROCEDURE BuildErrorResponse(
+	IN httpStatus INTEGER,
+	IN correlationId CHARACTER,
+	IN errorCode CHARACTER,
+	IN errorMessage CHARACTER,
+	IN errorDetail CHARACTER
+	)
+	BEGIN
+		SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
+		SET OutputRoot.HTTPResponseHeader."Content-Type" =
+		'application/json; charset=utf-8';
+		SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+		CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+		SET OutputRoot.JSON.Data.status = 'FAILED';
+		SET OutputRoot.JSON.Data.correlationId = correlationId;
+		SET OutputRoot.JSON.Data.errorCode = errorCode;
+		SET OutputRoot.JSON.Data.message = errorMessage;
+		SET OutputRoot.JSON.Data.detail = errorDetail;
+		SET OutputRoot.JSON.Data.httpStatus = httpStatus;
+		SET OutputRoot.JSON.Data.flowName = 'MQPubSubFlow';
+		SET OutputRoot.JSON.Data.timestamp =
+		CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+	END;
+END MODULE;
+
+CREATE COMPUTE MODULE MQPubSub__Compute
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		-- CALL CopyMessageHeaders();
+		-- CALL CopyEntireMessage();
+		RETURN TRUE;
+	END;
+
+	CREATE PROCEDURE CopyMessageHeaders() BEGIN
+		DECLARE I INTEGER 1;
+		DECLARE J INTEGER;
+		SET J = CARDINALITY(InputRoot.*[]);
+		WHILE I < J DO
+			SET OutputRoot.*[I] = InputRoot.*[I];
+			SET I = I + 1;
+		END WHILE;
+	END;
+
+	CREATE PROCEDURE CopyEntireMessage() BEGIN
+		SET OutputRoot = InputRoot;
+	END;
+END MODULE;

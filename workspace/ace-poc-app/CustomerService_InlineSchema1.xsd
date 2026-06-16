@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<xsd:schema xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:ibmSchExtn="http://www.ibm.com/schema/extensions" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:tns="http://company.com/acepoc/customer" xmlns:xsd="http://www.w3.org/2001/XMLSchema" elementFormDefault="qualified" targetNamespace="http://company.com/acepoc/customer">
+              
+  <xsd:element ibmSchExtn:docRoot="true" name="GetCustomerDetailsRequest">
+                    
+    <xsd:complexType>
+                          
+      <xsd:sequence>
+                                
+        <xsd:element name="customerId" type="xsd:string"/>
+                            
+      </xsd:sequence>
+                      
+    </xsd:complexType>
+                
+  </xsd:element>
+              
+  <xsd:element ibmSchExtn:docRoot="true" name="GetCustomerDetailsResponse">
+                    
+    <xsd:complexType>
+                          
+      <xsd:sequence>
+                                
+        <xsd:element name="customerId" type="xsd:string"/>
+                                
+        <xsd:element name="customerName" type="xsd:string"/>
+                                
+        <xsd:element name="accountStatus" type="xsd:string"/>
+                                
+        <xsd:element name="mobileNumber" type="xsd:string"/>
+                            
+      </xsd:sequence>
+                      
+    </xsd:complexType>
+                
+  </xsd:element>
+          
+</xsd:schema>

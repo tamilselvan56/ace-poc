@@ -1,0 +1,34 @@
+
+CREATE COMPUTE MODULE MQPubSub_Reply
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+
+        IF EXISTS(InputRoot.JSON.Data.correlationId[]) THEN
+            SET correlationId =
+                CAST(InputRoot.JSON.Data.correlationId AS CHARACTER);
+        ELSE
+            SET correlationId = 'ACE-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 202;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type" =
+            'application/json; charset=utf-8';
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.status       = 'ACCEPTED';
+        SET OutputRoot.JSON.Data.message      = 'Event published to MQ successfully';
+        SET OutputRoot.JSON.Data.queueName    = 'ACE.POC.GENERAL.EVENTS';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.flowName     = 'MQPubSubFlow';
+        SET OutputRoot.JSON.Data.timestamp    =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        RETURN TRUE;
+    END;
+END MODULE;

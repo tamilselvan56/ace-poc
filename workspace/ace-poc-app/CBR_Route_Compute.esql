@@ -1,0 +1,141 @@
+
+CREATE COMPUTE MODULE CBR_Route_Compute
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        DECLARE messageType CHARACTER '';
+        DECLARE targetQueue CHARACTER '';
+
+        SET correlationId = GetCorrelationId();
+
+        IF NOT EXISTS(InputRoot.JSON.Data[]) THEN
+            CALL BuildErrorResponse(
+                400,
+                correlationId,
+                'ERR_CBR_001',
+                'Invalid request body',
+                'Request body must be valid JSON.'
+            );
+
+            PROPAGATE TO TERMINAL 'out1';
+            RETURN FALSE;
+        END IF;
+
+        SET messageType =
+            UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.messageType AS CHARACTER), '')));
+
+        IF messageType = '' THEN
+            CALL BuildErrorResponse(
+                400,
+                correlationId,
+                'ERR_CBR_002',
+                'Validation failed',
+                'messageType is required.'
+            );
+
+            PROPAGATE TO TERMINAL 'out1';
+            RETURN FALSE;
+        END IF;
+
+        IF messageType = 'ACCOUNT' THEN
+            SET targetQueue = 'ACE.POC.ACCOUNT.EVENTS';
+
+        ELSEIF messageType = 'TRANSACTION' THEN
+            SET targetQueue = 'ACE.POC.TRANSACTION.EVENTS';
+
+        ELSE
+            CALL BuildErrorResponse(
+                400,
+                correlationId,
+                'ERR_CBR_003',
+                'Invalid messageType',
+                'messageType must be ACCOUNT or TRANSACTION.'
+            );
+
+            PROPAGATE TO TERMINAL 'out1';
+            RETURN FALSE;
+        END IF;
+
+        -- Store values for reply compute
+        SET OutputLocalEnvironment.Variable.targetQueue = targetQueue;
+        SET OutputLocalEnvironment.Variable.messageType = messageType;
+        SET OutputLocalEnvironment.Variable.correlationId = correlationId;
+
+        -- Dynamic MQ destination
+        SET OutputLocalEnvironment.Destination.MQ.DestinationData[1].queueManagerName =
+            'ACEPOCQM';
+
+        SET OutputLocalEnvironment.Destination.MQ.DestinationData[1].queueName =
+            targetQueue;
+
+        -- MQ message body
+        SET OutputRoot.Properties = InputRoot.Properties;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.routeStatus = 'ROUTED';
+        SET OutputRoot.JSON.Data.messageType = messageType;
+        SET OutputRoot.JSON.Data.targetQueue = targetQueue;
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+
+        SET OutputRoot.JSON.Data.routedAt =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        SET OutputRoot.JSON.Data.payload = InputRoot.JSON.Data;
+
+        RETURN TRUE;
+    END;
+
+
+    CREATE FUNCTION GetCorrelationId() RETURNS CHARACTER
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+
+        IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+            SET correlationId =
+                CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        RETURN correlationId;
+    END;
+
+
+    CREATE PROCEDURE BuildErrorResponse(
+        IN httpStatus INTEGER,
+        IN correlationId CHARACTER,
+        IN errorCode CHARACTER,
+        IN errorMessage CHARACTER,
+        IN errorDetail CHARACTER
+    )
+    BEGIN
+        SET OutputRoot.Properties = InputRoot.Properties;
+
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type" =
+            'application/json; charset=utf-8';
+
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" =
+            correlationId;
+
+        SET OutputRoot.HTTPResponseHeader."X-Error-Code" =
+            errorCode;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.status = 'FAILED';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.errorCode = errorCode;
+        SET OutputRoot.JSON.Data.message = errorMessage;
+        SET OutputRoot.JSON.Data.detail = errorDetail;
+        SET OutputRoot.JSON.Data.httpStatus = httpStatus;
+        SET OutputRoot.JSON.Data.flowName = 'ContentBasedRoutingFlow';
+        SET OutputRoot.JSON.Data.timestamp =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+    END;
+
+END MODULE;
