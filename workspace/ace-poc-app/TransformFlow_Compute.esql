@@ -1,0 +1,189 @@
+CREATE COMPUTE MODULE TransformFlow_Compute
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        DECLARE accountId     CHARACTER '';
+        DECLARE customerId    CHARACTER '';
+        DECLARE accountType   CHARACTER '';
+        DECLARE currency      CHARACTER '';
+
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+        SET correlationId = GetCorrelationId();
+
+        -- Validate JSON body exists
+        IF NOT EXISTS(InputRoot.JSON.Data[]) THEN
+            CALL BuildErrorResponse(
+                400, correlationId,
+                'ERR_TRF_001', 'Invalid request body',
+                'Request body must be valid JSON.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        SET accountId =
+            TRIM(COALESCE(CAST(InputRoot.JSON.Data.accountId AS CHARACTER), ''));
+
+        SET customerId =
+            TRIM(COALESCE(CAST(InputRoot.JSON.Data.customerId AS CHARACTER), ''));
+
+        SET accountType =
+            UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.accountType AS CHARACTER), '')));
+
+        SET currency =
+            UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.currency AS CHARACTER), '')));
+
+        IF accountId = '' THEN
+            CALL BuildErrorResponse(
+                400, correlationId,
+                'ERR_TRF_002', 'Validation failed',
+                'accountId is required.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        IF customerId = '' THEN
+            CALL BuildErrorResponse(
+                400, correlationId,
+                'ERR_TRF_003', 'Validation failed',
+                'customerId is required.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        IF accountType = '' THEN
+            CALL BuildErrorResponse(
+                400, correlationId,
+                'ERR_TRF_004', 'Validation failed',
+                'accountType is required.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        IF currency = '' THEN
+            CALL BuildErrorResponse(
+                400, correlationId,
+                'ERR_TRF_005', 'Validation failed',
+                'currency is required.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        IF NOT IsValidCurrency(currency) THEN
+            CALL BuildErrorResponse(
+                400, correlationId,
+                'ERR_TRF_006', 'Validation failed',
+                'currency must be INR, USD, EUR, or GBP.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        -- ── SUCCESS: Build XML Response ────────────────────────────────
+
+        -- Safe cleanup of any previous output domains
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 200;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type" =
+            'application/xml; charset=utf-8';
+
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" =
+            correlationId;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('XMLNSC');
+
+        SET OutputRoot.XMLNSC.Account.AccountId     = accountId;
+        SET OutputRoot.XMLNSC.Account.CustomerId    = customerId;
+        SET OutputRoot.XMLNSC.Account.AccountType   = accountType;
+        SET OutputRoot.XMLNSC.Account.Currency      = currency;
+        SET OutputRoot.XMLNSC.Account.Status        = 'TRANSFORMED';
+        SET OutputRoot.XMLNSC.Account.Environment   = 'DEV';
+        SET OutputRoot.XMLNSC.Account.FlowName      = 'TransformFlow';
+        SET OutputRoot.XMLNSC.Account.CorrelationId = correlationId;
+        SET OutputRoot.XMLNSC.Account.TransformedAt =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER
+                 FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        RETURN TRUE;
+    END;
+
+
+    CREATE FUNCTION GetCorrelationId() RETURNS CHARACTER
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+
+        IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+            SET correlationId =
+                CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER
+                     FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        RETURN correlationId;
+    END;
+
+
+    CREATE FUNCTION IsValidCurrency(IN currency CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        IF currency = 'INR'
+           OR currency = 'USD'
+           OR currency = 'EUR'
+           OR currency = 'GBP' THEN
+            RETURN TRUE;
+        END IF;
+        RETURN FALSE;
+    END;
+
+
+    CREATE PROCEDURE BuildErrorResponse(
+        IN httpStatus    INTEGER,
+        IN correlationId CHARACTER,
+        IN errorCode     CHARACTER,
+        IN errorMessage  CHARACTER,
+        IN errorDetail   CHARACTER
+    )
+    BEGIN
+        -- Safe cleanup of any previous output domains
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type" =
+            'application/json; charset=utf-8';
+
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" =
+            correlationId;
+
+        SET OutputRoot.HTTPResponseHeader."X-Error-Code" =
+            errorCode;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.status       = 'FAILED';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.errorCode    = errorCode;
+        SET OutputRoot.JSON.Data.message      = errorMessage;
+        SET OutputRoot.JSON.Data.detail       = errorDetail;
+        SET OutputRoot.JSON.Data.httpStatus   = httpStatus;
+        SET OutputRoot.JSON.Data.flowName     = 'TransformFlow';
+        SET OutputRoot.JSON.Data.timestamp    =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER
+                 FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+    END;
+
+END MODULE;
