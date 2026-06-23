@@ -1,0 +1,59 @@
+
+-- ================================================================
+-- MODULE 2: AuditLog_Reply
+-- ================================================================
+CREATE COMPUTE MODULE AuditLog_Reply
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        DECLARE auditId       CHARACTER '';
+
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+
+        IF EXISTS(InputRoot.JSON.Data.correlationId[]) THEN
+            SET correlationId =
+                CAST(InputRoot.JSON.Data.correlationId AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        IF EXISTS(InputRoot.JSON.Data.auditId[]) THEN
+            SET auditId = CAST(InputRoot.JSON.Data.auditId AS CHARACTER);
+        ELSE
+            SET auditId =
+                'AUD-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.MQMD;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 202;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type"     = 'application/json; charset=utf-8';
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.status        = 'ACCEPTED';
+        SET OutputRoot.JSON.Data.message       = 'Audit log published to MQ successfully';
+        SET OutputRoot.JSON.Data.auditId       = auditId;
+        SET OutputRoot.JSON.Data.targetQueue   = 'ACE.POC.GENERAL.EVENTS';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.timestamp     =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER
+                 FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        RETURN TRUE;
+    END;
+
+END MODULE;
+
+

@@ -1,0 +1,63 @@
+-- ================================================================
+-- MODULE 3: AuditLog_ErrorHandler
+-- ================================================================
+CREATE COMPUTE MODULE AuditLog_ErrorHandler
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        DECLARE errorText     CHARACTER '';
+        DECLARE errorNumber   INTEGER;
+
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+
+        IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+            SET correlationId =
+                CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        IF EXISTS(InputExceptionList.*[]) THEN
+            SET errorText =
+                CAST(InputExceptionList.*[1].*[1].Text AS CHARACTER);
+            SET errorNumber =
+                CAST(InputExceptionList.*[1].*[1].Number AS INTEGER);
+        ELSE
+            SET errorText   = 'An unexpected error occurred in AuditLogFlow.';
+            SET errorNumber = 0;
+        END IF;
+
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+        DELETE FIELD OutputRoot.MQMD;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 500;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type"     = 'application/json; charset=utf-8';
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+        SET OutputRoot.HTTPResponseHeader."X-Error-Code"     = 'ERR_AUD_500';
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.status        = 'FAILED';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.errorCode     = 'ERR_AUD_500';
+        SET OutputRoot.JSON.Data.message       = 'Internal server error in AuditLogFlow';
+        SET OutputRoot.JSON.Data.detail        = errorText;
+        SET OutputRoot.JSON.Data.errorNumber   = errorNumber;
+        SET OutputRoot.JSON.Data.httpStatus    = 500;
+        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.timestamp     =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER
+                 FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        RETURN TRUE;
+    END;
+
+END MODULE;
