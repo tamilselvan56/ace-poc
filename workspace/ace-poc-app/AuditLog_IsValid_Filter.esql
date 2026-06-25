@@ -1,0 +1,16 @@
+CREATE FILTER MODULE AuditLog_IsValid_Filter
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        IF EXISTS(LocalEnvironment.Variable.auditRoute[]) THEN
+
+            IF CAST(LocalEnvironment.Variable.auditRoute AS CHARACTER) = 'MQ' THEN
+                RETURN TRUE;
+            END IF;
+
+        END IF;
+
+        RETURN FALSE;
+    END;
+
+END MODULE;
