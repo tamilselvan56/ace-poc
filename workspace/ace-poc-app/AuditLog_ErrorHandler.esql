@@ -1,37 +1,26 @@
+
+
 CREATE COMPUTE MODULE AuditLog_ErrorHandler
 
     CREATE FUNCTION Main() RETURNS BOOLEAN
     BEGIN
         DECLARE correlationId CHARACTER '';
-        DECLARE auditId CHARACTER '';
+        DECLARE auditId       CHARACTER '';
 
         SET OutputLocalEnvironment = InputLocalEnvironment;
-
         DELETE FIELD OutputLocalEnvironment.Destination.MQ;
 
         IF EXISTS(InputLocalEnvironment.Variable.correlationId[]) THEN
-            SET correlationId =
-                CAST(
-                    InputLocalEnvironment.Variable.correlationId
-                    AS CHARACTER
-                );
+            SET correlationId = CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
         ELSE
-            SET correlationId =
-                'ACE-' ||
-                CAST(
-                    CURRENT_GMTTIMESTAMP AS CHARACTER
-                    FORMAT 'yyyyMMddHHmmssSSS'
-                );
+            SET correlationId = 'ACE-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
         END IF;
 
         IF EXISTS(InputLocalEnvironment.Variable.auditId[]) THEN
-            SET auditId =
-                CAST(
-                    InputLocalEnvironment.Variable.auditId
-                    AS CHARACTER
-                );
+            SET auditId = CAST(InputLocalEnvironment.Variable.auditId AS CHARACTER);
         END IF;
 
+        -- ── HTTP error response back to caller ────────────────────────────
         DELETE FIELD OutputRoot.JSON;
         DELETE FIELD OutputRoot.XMLNSC;
         DELETE FIELD OutputRoot.MQMD;
@@ -41,41 +30,28 @@ CREATE COMPUTE MODULE AuditLog_ErrorHandler
         SET OutputRoot.Properties = InputRoot.Properties;
 
         SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 500;
-
-        SET OutputRoot.HTTPResponseHeader."Content-Type" =
-            'application/json; charset=utf-8';
-
-        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" =
-            correlationId;
-
-        SET OutputRoot.HTTPResponseHeader."X-Error-Code" =
-            'ERR_AUD_500';
+        SET OutputRoot.HTTPResponseHeader."Content-Type"     = 'application/json; charset=utf-8';
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+        SET OutputRoot.HTTPResponseHeader."X-Error-Code"     = 'ERR_AUD_500';
 
         CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
 
-        SET OutputRoot.JSON.Data.status = 'FAILED';
+        SET OutputRoot.JSON.Data.status        = 'FAILED';
         SET OutputRoot.JSON.Data.correlationId = correlationId;
-        SET OutputRoot.JSON.Data.auditId = auditId;
-        SET OutputRoot.JSON.Data.errorCode = 'ERR_AUD_500';
-
-        SET OutputRoot.JSON.Data.message =
-            'Audit event could not be published to MQ';
-
-        SET OutputRoot.JSON.Data.detail =
-            'MQ publish failed. Validate queue manager and destination queue.';
-
-        SET OutputRoot.JSON.Data.httpStatus = 500;
-        SET OutputRoot.JSON.Data.flowName = 'AuditLogFlow';
-
-        SET OutputRoot.JSON.Data.retryCount = 0;
+        SET OutputRoot.JSON.Data.auditId       = auditId;
+        SET OutputRoot.JSON.Data.errorCode     = 'ERR_AUD_500';
+        SET OutputRoot.JSON.Data.message       = 'Audit event could not be published to MQ';
+        SET OutputRoot.JSON.Data.detail        = 'MQ publish failed. Message routed to retry/DLQ queue.';
+        SET OutputRoot.JSON.Data.httpStatus    = 500;
+        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.retryCount    = 0;
         SET OutputRoot.JSON.Data.maxRetryCount = 3;
-        SET OutputRoot.JSON.Data.retryStatus = 'PENDING';
+        SET OutputRoot.JSON.Data.retryStatus   = 'PENDING';
+        SET OutputRoot.JSON.Data.timestamp     =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
 
-        SET OutputRoot.JSON.Data.timestamp =
-            CAST(
-                CURRENT_GMTTIMESTAMP AS CHARACTER
-                FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z'''
-            );
+        -- ✅ Signal RetryCompute to route to DLQ via LocalEnvironment
+        SET OutputLocalEnvironment.Variable.auditRoute = 'RETRY';
 
         RETURN TRUE;
     END;

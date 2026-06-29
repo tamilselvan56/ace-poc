@@ -1,0 +1,239 @@
+--
+--
+--CREATE COMPUTE MODULE AuditLog_RetryCompute
+--
+--    CREATE FUNCTION Main() RETURNS BOOLEAN
+--    BEGIN
+--        DECLARE correlationId CHARACTER '';
+--        DECLARE auditId       CHARACTER '';
+--        DECLARE retryCount    INTEGER;
+--        DECLARE maxRetryCount INTEGER;
+--        DECLARE attempt       INTEGER;
+--
+--        -- ── Read identifiers ──────────────────────────────────────────────
+--        IF EXISTS(InputLocalEnvironment.Variable.correlationId[]) THEN
+--            SET correlationId =
+--                CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
+--        ELSE
+--            SET correlationId =
+--                'ACE-' ||
+--                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+--        END IF;
+--
+--        IF EXISTS(InputLocalEnvironment.Variable.auditId[]) THEN
+--            SET auditId = CAST(InputLocalEnvironment.Variable.auditId AS CHARACTER);
+--        END IF;
+--
+--        IF EXISTS(InputRoot.JSON.Data.retryCount[]) THEN
+--            SET retryCount = CAST(InputRoot.JSON.Data.retryCount AS INTEGER);
+--        ELSE
+--            SET retryCount = 0;
+--        END IF;
+--
+--        SET maxRetryCount = 3;
+--        SET attempt       = retryCount + 1;
+--
+--        -- ── Route decision ────────────────────────────────────────────────
+--        IF attempt <= maxRetryCount THEN
+--
+--            -- ── TRANSIENT: still within retry limit ───────────────────────
+--            SET OutputLocalEnvironment.Variable.correlationId = correlationId;
+--            SET OutputLocalEnvironment.Variable.auditId       = auditId;
+--            SET OutputLocalEnvironment.Variable.retryCount    = attempt;
+--
+--            DELETE FIELD OutputLocalEnvironment.Destination.MQ;
+--            SET OutputLocalEnvironment.Destination.MQ.DestinationData.queueManagerName = 'ACEPOCQM';
+--            SET OutputLocalEnvironment.Destination.MQ.DestinationData.queueName        = 'DLQ.TRANSIENT.ACE.POC';
+--
+--            CALL BuildMQMessage(
+--                correlationId, auditId, attempt, maxRetryCount,
+--                'DLQ.TRANSIENT.ACE.POC', 'RETRY_PENDING', 'TRANSIENT'
+--            );
+--
+--            -- ✅ 'out' terminal → wired to AuditLog_RetryMQOutput
+--            PROPAGATE TO TERMINAL 'out' FINALIZE NONE DELETE NONE;
+--
+--        ELSE
+--
+--            -- ── PERMANENT: retries exhausted → dead letter ────────────────
+--            SET OutputLocalEnvironment.Variable.correlationId = correlationId;
+--            SET OutputLocalEnvironment.Variable.auditId       = auditId;
+--            SET OutputLocalEnvironment.Variable.retryCount    = attempt;
+--
+--            DELETE FIELD OutputLocalEnvironment.Destination.MQ;
+--            SET OutputLocalEnvironment.Destination.MQ.DestinationData.queueManagerName = 'ACEPOCQM';
+--            SET OutputLocalEnvironment.Destination.MQ.DestinationData.queueName        = 'DLQ.PERMANENT.ACE.POC';
+--
+--            CALL BuildMQMessage(
+--                correlationId, auditId, attempt, maxRetryCount,
+--                'DLQ.PERMANENT.ACE.POC', 'DEAD_LETTERED', 'PERMANENT'
+--            );
+--
+--            -- ✅ 'alternate' terminal → wired to AuditLog_FinalMQOutput
+--            PROPAGATE TO TERMINAL 'alternate' FINALIZE NONE DELETE NONE;
+--
+--        END IF;
+--
+--        RETURN FALSE;
+--    END;
+--
+--    CREATE PROCEDURE BuildMQMessage(
+--        IN correlationId CHARACTER,
+--        IN auditId       CHARACTER,
+--        IN retryCount    INTEGER,
+--        IN maxRetryCount INTEGER,
+--        IN targetQueue   CHARACTER,
+--        IN status        CHARACTER,
+--        IN retryStatus   CHARACTER
+--    )
+--    BEGIN
+--        DELETE FIELD OutputRoot.JSON;
+--        DELETE FIELD OutputRoot.XMLNSC;
+--        DELETE FIELD OutputRoot.HTTPResponseHeader;
+--        DELETE FIELD OutputRoot.HTTPInputHeader;
+--        DELETE FIELD OutputRoot.MQMD;
+--
+--        SET OutputRoot.Properties       = InputRoot.Properties;
+--        SET OutputRoot.MQMD.Format      = 'MQSTR';
+--        SET OutputRoot.MQMD.Persistence = 1;
+--
+--        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+--
+--        SET OutputRoot.JSON.Data.auditId       = auditId;
+--        SET OutputRoot.JSON.Data.correlationId = correlationId;
+--        SET OutputRoot.JSON.Data.retryCount    = retryCount;
+--        SET OutputRoot.JSON.Data.maxRetryCount = maxRetryCount;
+--        SET OutputRoot.JSON.Data.targetQueue   = targetQueue;
+--        SET OutputRoot.JSON.Data.status        = status;
+--        SET OutputRoot.JSON.Data.retryStatus   = retryStatus;
+--        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+--        SET OutputRoot.JSON.Data.environment   = 'DEV';
+--        SET OutputRoot.JSON.Data.failureReason =
+--            'MQ publish failed - queue full or MQ unavailable';
+--
+--        IF EXISTS(InputRoot.JSON.Data.eventType[]) THEN
+--            SET OutputRoot.JSON.Data.eventType    = CAST(InputRoot.JSON.Data.eventType    AS CHARACTER);
+--            SET OutputRoot.JSON.Data.sourceSystem = CAST(InputRoot.JSON.Data.sourceSystem AS CHARACTER);
+--            SET OutputRoot.JSON.Data.userId       = CAST(InputRoot.JSON.Data.userId       AS CHARACTER);
+--            SET OutputRoot.JSON.Data.action       = CAST(InputRoot.JSON.Data.action       AS CHARACTER);
+--            SET OutputRoot.JSON.Data.resourceId   = CAST(InputRoot.JSON.Data.resourceId   AS CHARACTER);
+--            SET OutputRoot.JSON.Data.resourceType = CAST(InputRoot.JSON.Data.resourceType AS CHARACTER);
+--        END IF;
+--
+--        SET OutputRoot.JSON.Data.originalRequest = InputRoot.JSON.Data.originalRequest;
+--
+--        SET OutputRoot.JSON.Data.failedAt =
+--            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+--    END;
+--
+--END MODULE;
+
+
+CREATE COMPUTE MODULE AuditLog_RetryCompute
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        DECLARE auditId       CHARACTER '';
+        DECLARE retryCount    INTEGER;
+        DECLARE maxRetryCount INTEGER;
+        DECLARE targetQueue   CHARACTER '';
+
+        -- ── Read identifiers ──────────────────────────────────────────────
+        IF EXISTS(InputLocalEnvironment.Variable.correlationId[]) THEN
+            SET correlationId =
+                CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        IF EXISTS(InputLocalEnvironment.Variable.auditId[]) THEN
+            SET auditId =
+                CAST(InputLocalEnvironment.Variable.auditId AS CHARACTER);
+        END IF;
+
+        -- ── Read retry counters ───────────────────────────────────────────
+        IF EXISTS(InputRoot.JSON.Data.retryCount[]) THEN
+            SET retryCount = CAST(InputRoot.JSON.Data.retryCount AS INTEGER);
+        ELSE
+            SET retryCount = 0;
+        END IF;
+
+        IF EXISTS(InputRoot.JSON.Data.maxRetryCount[]) THEN
+            SET maxRetryCount = CAST(InputRoot.JSON.Data.maxRetryCount AS INTEGER);
+        ELSE
+            SET maxRetryCount = 3;
+        END IF;
+
+        -- ── Increment ─────────────────────────────────────────────────────
+        SET retryCount = retryCount + 1;
+
+        -- ── Route decision ────────────────────────────────────────────────
+        -- retryCount 1,2,3 → TRANSIENT (can be reprocessed later)
+        -- retryCount 4+    → PERMANENT (exhausted, dead letter)
+        IF retryCount <= maxRetryCount THEN
+            SET targetQueue = 'DLQ.TRANSIENT.ACE.POC';
+        ELSE
+            SET targetQueue = 'DLQ.PERMANENT.ACE.POC';
+        END IF;
+
+        -- ── Store for downstream nodes ────────────────────────────────────
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+        DELETE FIELD OutputLocalEnvironment.Destination.MQ;
+
+        SET OutputLocalEnvironment.Variable.retryCount  = retryCount;
+        SET OutputLocalEnvironment.Variable.targetQueue = targetQueue;
+
+        -- ✅ Dynamic mode — single DestinationData, no [1] index
+        SET OutputLocalEnvironment.Destination.MQ.DestinationData.queueManagerName = 'ACEPOCQM';
+        SET OutputLocalEnvironment.Destination.MQ.DestinationData.queueName        = targetQueue;
+
+        -- ── Rebuild message ───────────────────────────────────────────────
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+        DELETE FIELD OutputRoot.MQMD;
+
+        SET OutputRoot.Properties       = InputRoot.Properties;
+        SET OutputRoot.MQMD.Format      = 'MQSTR';
+        SET OutputRoot.MQMD.Persistence = 1;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.auditId         = auditId;
+        SET OutputRoot.JSON.Data.correlationId   = correlationId;
+        SET OutputRoot.JSON.Data.eventType       = CAST(InputRoot.JSON.Data.eventType    AS CHARACTER);
+        SET OutputRoot.JSON.Data.sourceSystem    = CAST(InputRoot.JSON.Data.sourceSystem AS CHARACTER);
+        SET OutputRoot.JSON.Data.userId          = CAST(InputRoot.JSON.Data.userId       AS CHARACTER);
+        SET OutputRoot.JSON.Data.action          = CAST(InputRoot.JSON.Data.action       AS CHARACTER);
+        SET OutputRoot.JSON.Data.resourceId      = CAST(InputRoot.JSON.Data.resourceId   AS CHARACTER);
+        SET OutputRoot.JSON.Data.resourceType    = CAST(InputRoot.JSON.Data.resourceType AS CHARACTER);
+        SET OutputRoot.JSON.Data.originalRequest = InputRoot.JSON.Data.originalRequest;
+
+        SET OutputRoot.JSON.Data.retryCount    = retryCount;
+        SET OutputRoot.JSON.Data.maxRetryCount = maxRetryCount;
+        SET OutputRoot.JSON.Data.targetQueue   = targetQueue;
+        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.environment   = 'DEV';
+
+        IF retryCount <= maxRetryCount THEN
+            SET OutputRoot.JSON.Data.status      = 'RETRY_PENDING';
+            SET OutputRoot.JSON.Data.retryStatus = 'TRANSIENT';
+        ELSE
+            SET OutputRoot.JSON.Data.status      = 'DEAD_LETTERED';
+            SET OutputRoot.JSON.Data.retryStatus = 'PERMANENT';
+        END IF;
+
+        SET OutputRoot.JSON.Data.failureReason =
+            'MQ publish failed - queue full or MQ unavailable';
+
+        SET OutputRoot.JSON.Data.failedAt =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        RETURN TRUE;
+    END;
+
+END MODULE;

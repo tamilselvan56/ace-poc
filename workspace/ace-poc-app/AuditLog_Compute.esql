@@ -2,267 +2,171 @@
 
 CREATE COMPUTE MODULE AuditLog_Compute
 
-	CREATE FUNCTION Main() RETURNS BOOLEAN
-	BEGIN
-		DECLARE correlationId CHARACTER '';
-		DECLARE auditId CHARACTER '';
-		DECLARE eventType CHARACTER '';
-		DECLARE sourceSystem CHARACTER '';
-		DECLARE userId CHARACTER '';
-		DECLARE action CHARACTER '';
-		DECLARE resourceId CHARACTER '';
-		DECLARE resourceType CHARACTER '';
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        DECLARE auditId       CHARACTER '';
+        DECLARE eventType     CHARACTER '';
+        DECLARE sourceSystem  CHARACTER '';
+        DECLARE userId        CHARACTER '';
+        DECLARE action        CHARACTER '';
+        DECLARE resourceId    CHARACTER '';
+        DECLARE resourceType  CHARACTER '';
 
-		SET OutputLocalEnvironment = InputLocalEnvironment;
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+        SET correlationId = GetCorrelationId();
 
-		SET correlationId = GetCorrelationId();
+        IF NOT EXISTS(InputRoot.JSON.Data[]) THEN
+            CALL BuildErrorResponse(
+                400, correlationId,
+                'ERR_AUD_001', 'Invalid request body',
+                'Request body must be valid JSON.'
+            );
+            RETURN TRUE;
+        END IF;
 
-		IF NOT EXISTS(InputRoot.JSON.Data[]) THEN
-			CALL BuildErrorResponse(
-				400,
-				correlationId,
-				'ERR_AUD_001',
-				'Invalid request body',
-				'Request body must be valid JSON.'
-			);
-			RETURN TRUE;
-		END IF;
+        SET eventType    = UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.eventType    AS CHARACTER), '')));
+        SET sourceSystem =       TRIM(COALESCE(CAST(InputRoot.JSON.Data.sourceSystem AS CHARACTER), ''));
+        SET userId       =       TRIM(COALESCE(CAST(InputRoot.JSON.Data.userId       AS CHARACTER), ''));
+        SET action       = UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.action       AS CHARACTER), '')));
+        SET resourceId   =       TRIM(COALESCE(CAST(InputRoot.JSON.Data.resourceId   AS CHARACTER), ''));
+        SET resourceType = UPPER(TRIM(COALESCE(CAST(InputRoot.JSON.Data.resourceType AS CHARACTER), '')));
 
-		SET eventType =
-			UPPER(TRIM(COALESCE(
-				CAST(InputRoot.JSON.Data.eventType AS CHARACTER), ''
-			)));
+        IF eventType = '' THEN
+            CALL BuildErrorResponse(400, correlationId, 'ERR_AUD_002', 'Validation failed', 'eventType is required.');
+            RETURN TRUE;
+        END IF;
+        IF sourceSystem = '' THEN
+            CALL BuildErrorResponse(400, correlationId, 'ERR_AUD_003', 'Validation failed', 'sourceSystem is required.');
+            RETURN TRUE;
+        END IF;
+        IF userId = '' THEN
+            CALL BuildErrorResponse(400, correlationId, 'ERR_AUD_004', 'Validation failed', 'userId is required.');
+            RETURN TRUE;
+        END IF;
+        IF action = '' THEN
+            CALL BuildErrorResponse(400, correlationId, 'ERR_AUD_005', 'Validation failed', 'action is required.');
+            RETURN TRUE;
+        END IF;
+        IF NOT IsValidAction(action) THEN
+            CALL BuildErrorResponse(400, correlationId, 'ERR_AUD_006', 'Validation failed', 'action must be CREATE, READ, UPDATE, DELETE, or LOGIN.');
+            RETURN TRUE;
+        END IF;
+        IF resourceId = '' THEN
+            CALL BuildErrorResponse(400, correlationId, 'ERR_AUD_007', 'Validation failed', 'resourceId is required.');
+            RETURN TRUE;
+        END IF;
+        IF resourceType = '' THEN
+            CALL BuildErrorResponse(400, correlationId, 'ERR_AUD_008', 'Validation failed', 'resourceType is required.');
+            RETURN TRUE;
+        END IF;
 
-		SET sourceSystem =
-			TRIM(COALESCE(
-				CAST(InputRoot.JSON.Data.sourceSystem AS CHARACTER), ''
-			));
+        SET auditId = 'AUD-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
 
-		SET userId =
-			TRIM(COALESCE(
-				CAST(InputRoot.JSON.Data.userId AS CHARACTER), ''
-			));
+        SET OutputLocalEnvironment.Variable.auditRoute    = 'MQ';
+        SET OutputLocalEnvironment.Variable.correlationId = correlationId;
+        SET OutputLocalEnvironment.Variable.auditId       = auditId;
 
-		SET action =
-			UPPER(TRIM(COALESCE(
-				CAST(InputRoot.JSON.Data.action AS CHARACTER), ''
-			)));
+        SET OutputLocalEnvironment.Destination.MQ.DestinationData[1].queueManagerName = 'ACEPOCQM';
+        SET OutputLocalEnvironment.Destination.MQ.DestinationData[1].queueName        = 'ACE.POC.GENERAL.EVENTS';
 
-		SET resourceId =
-			TRIM(COALESCE(
-				CAST(InputRoot.JSON.Data.resourceId AS CHARACTER), ''
-			));
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+        DELETE FIELD OutputRoot.MQMD;
 
-		SET resourceType =
-			UPPER(TRIM(COALESCE(
-				CAST(InputRoot.JSON.Data.resourceType AS CHARACTER), ''
-			)));
+        SET OutputRoot.Properties      = InputRoot.Properties;
+        SET OutputRoot.MQMD.Format     = 'MQSTR';
+        SET OutputRoot.MQMD.Persistence = 1;
 
-		IF eventType = '' THEN
-			CALL BuildErrorResponse(
-				400, correlationId,
-				'ERR_AUD_002',
-				'Validation failed',
-				'eventType is required.'
-			);
-			RETURN TRUE;
-		END IF;
+        -- ✅ Store retry metadata in MQMD.CorrelId field (as readable tag)
+        SET OutputRoot.MQMD.CorrelId   = CAST(correlationId AS BLOB CCSID 1208);
 
-		IF sourceSystem = '' THEN
-			CALL BuildErrorResponse(
-				400, correlationId,
-				'ERR_AUD_003',
-				'Validation failed',
-				'sourceSystem is required.'
-			);
-			RETURN TRUE;
-		END IF;
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
 
-		IF userId = '' THEN
-			CALL BuildErrorResponse(
-				400, correlationId,
-				'ERR_AUD_004',
-				'Validation failed',
-				'userId is required.'
-			);
-			RETURN TRUE;
-		END IF;
+        SET OutputRoot.JSON.Data.auditId       = auditId;
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.eventType     = eventType;
+        SET OutputRoot.JSON.Data.sourceSystem  = sourceSystem;
+        SET OutputRoot.JSON.Data.userId        = userId;
+        SET OutputRoot.JSON.Data.action        = action;
+        SET OutputRoot.JSON.Data.resourceId    = resourceId;
+        SET OutputRoot.JSON.Data.resourceType  = resourceType;
+        SET OutputRoot.JSON.Data.status        = 'LOGGED';
+        SET OutputRoot.JSON.Data.targetQueue   = 'ACE.POC.GENERAL.EVENTS';
+        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.environment   = 'DEV';
 
-		IF action = '' THEN
-			CALL BuildErrorResponse(
-				400, correlationId,
-				'ERR_AUD_005',
-				'Validation failed',
-				'action is required.'
-			);
-			RETURN TRUE;
-		END IF;
+        -- ✅ Retry metadata embedded in the message body
+        SET OutputRoot.JSON.Data.retryCount    = 0;
+        SET OutputRoot.JSON.Data.maxRetryCount = 3;
+        SET OutputRoot.JSON.Data.retryStatus   = 'PENDING';
 
-		IF NOT IsValidAction(action) THEN
-			CALL BuildErrorResponse(
-				400, correlationId,
-				'ERR_AUD_006',
-				'Validation failed',
-				'action must be CREATE, READ, UPDATE, DELETE, or LOGIN.'
-			);
-			RETURN TRUE;
-		END IF;
+        SET OutputRoot.JSON.Data.loggedAt =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
 
-		IF resourceId = '' THEN
-			CALL BuildErrorResponse(
-				400, correlationId,
-				'ERR_AUD_007',
-				'Validation failed',
-				'resourceId is required.'
-			);
-			RETURN TRUE;
-		END IF;
+        SET OutputRoot.JSON.Data.originalRequest = InputRoot.JSON.Data;
 
-		IF resourceType = '' THEN
-			CALL BuildErrorResponse(
-				400, correlationId,
-				'ERR_AUD_008',
-				'Validation failed',
-				'resourceType is required.'
-			);
-			RETURN TRUE;
-		END IF;
+        RETURN TRUE;
+    END;
 
-		SET auditId =
-			'AUD-' ||
-			CAST(
-				CURRENT_GMTTIMESTAMP AS CHARACTER
-				FORMAT 'yyyyMMddHHmmssSSS'
-			);
+    CREATE FUNCTION GetCorrelationId() RETURNS CHARACTER
+    BEGIN
+        DECLARE correlationId CHARACTER '';
+        IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+            SET correlationId = CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+        ELSE
+            SET correlationId = 'ACE-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+        RETURN correlationId;
+    END;
 
-		SET OutputLocalEnvironment.Variable.auditRoute = 'MQ';
-		SET OutputLocalEnvironment.Variable.correlationId = correlationId;
-		SET OutputLocalEnvironment.Variable.auditId = auditId;
+    CREATE FUNCTION IsValidAction(IN action CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        IF action = 'CREATE' OR action = 'READ' OR action = 'UPDATE'
+            OR action = 'DELETE' OR action = 'LOGIN' THEN
+            RETURN TRUE;
+        END IF;
+        RETURN FALSE;
+    END;
 
-		SET OutputLocalEnvironment.Destination.MQ.DestinationData[1].queueManagerName =
-			'ACEPOCQM';
+    CREATE PROCEDURE BuildErrorResponse(
+        IN httpStatus    INTEGER,
+        IN correlationId CHARACTER,
+        IN errorCode     CHARACTER,
+        IN errorMessage  CHARACTER,
+        IN errorDetail   CHARACTER
+    )
+    BEGIN
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.MQMD;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
 
-		SET OutputLocalEnvironment.Destination.MQ.DestinationData[1].queueName =
-			'ACE.POC.GENERAL.EVENTS';
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+        SET OutputLocalEnvironment.Variable.auditRoute = 'HTTP_REPLY';
+        DELETE FIELD OutputLocalEnvironment.Destination.MQ;
 
-		DELETE FIELD OutputRoot.JSON;
-		DELETE FIELD OutputRoot.XMLNSC;
-		DELETE FIELD OutputRoot.HTTPResponseHeader;
-		DELETE FIELD OutputRoot.HTTPInputHeader;
-		DELETE FIELD OutputRoot.MQMD;
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
+        SET OutputRoot.Properties = InputRoot.Properties;
 
-		SET OutputRoot.Properties = InputRoot.Properties;
+        SET OutputRoot.HTTPResponseHeader."Content-Type"    = 'application/json; charset=utf-8';
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+        SET OutputRoot.HTTPResponseHeader."X-Error-Code"    = errorCode;
 
-		SET OutputRoot.MQMD.Format = 'MQSTR';
-		SET OutputRoot.MQMD.Persistence = 1;
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
 
-		CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
-
-		SET OutputRoot.JSON.Data.auditId        = auditId;
-		SET OutputRoot.JSON.Data.correlationId  = correlationId;
-		SET OutputRoot.JSON.Data.eventType      = eventType;
-		SET OutputRoot.JSON.Data.sourceSystem   = sourceSystem;
-		SET OutputRoot.JSON.Data.userId         = userId;
-		SET OutputRoot.JSON.Data.action         = action;
-		SET OutputRoot.JSON.Data.resourceId     = resourceId;
-		SET OutputRoot.JSON.Data.resourceType   = resourceType;
-		SET OutputRoot.JSON.Data.status         = 'LOGGED';
-		SET OutputRoot.JSON.Data.targetQueue    = 'ACE.POC.GENERAL.EVENTS';
-		SET OutputRoot.JSON.Data.flowName       = 'AuditLogFlow';
-		SET OutputRoot.JSON.Data.environment    = 'DEV';
-		SET OutputRoot.JSON.Data.retryCount     = 0;
-		SET OutputRoot.JSON.Data.maxRetryCount  = 3;
-		SET OutputRoot.JSON.Data.retryStatus    = 'PENDING';
-
-		SET OutputRoot.JSON.Data.loggedAt =
-			CAST(
-				CURRENT_GMTTIMESTAMP AS CHARACTER
-				FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z'''
-			);
-
-		SET OutputRoot.JSON.Data.originalRequest = InputRoot.JSON.Data;
-
-		RETURN TRUE;
-	END;
-
-	CREATE FUNCTION GetCorrelationId() RETURNS CHARACTER
-	BEGIN
-		DECLARE correlationId CHARACTER '';
-
-		IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
-			SET correlationId =
-				CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
-		ELSE
-			SET correlationId =
-				'ACE-' ||
-				CAST(
-					CURRENT_GMTTIMESTAMP AS CHARACTER
-					FORMAT 'yyyyMMddHHmmssSSS'
-				);
-		END IF;
-
-		RETURN correlationId;
-	END;
-
-	CREATE FUNCTION IsValidAction(IN action CHARACTER) RETURNS BOOLEAN
-	BEGIN
-		IF action = 'CREATE'
-			OR action = 'READ'
-			OR action = 'UPDATE'
-			OR action = 'DELETE'
-			OR action = 'LOGIN' THEN
-			RETURN TRUE;
-		END IF;
-
-		RETURN FALSE;
-	END;
-
-	-- ✅ FIXED: replaced DELETE FIELD OutputRoot.*:*[] with explicit deletes
-	CREATE PROCEDURE BuildErrorResponse(
-		IN httpStatus    INTEGER,
-		IN correlationId CHARACTER,
-		IN errorCode     CHARACTER,
-		IN errorMessage  CHARACTER,
-		IN errorDetail   CHARACTER
-	)
-	BEGIN
-		-- Explicit individual deletes — wildcard namespace syntax not supported here
-		DELETE FIELD OutputRoot.JSON;
-		DELETE FIELD OutputRoot.XMLNSC;
-		DELETE FIELD OutputRoot.MQMD;
-		DELETE FIELD OutputRoot.HTTPResponseHeader;
-		DELETE FIELD OutputRoot.HTTPInputHeader;
-
-		SET OutputLocalEnvironment = InputLocalEnvironment;
-		SET OutputLocalEnvironment.Variable.auditRoute = 'HTTP_REPLY';
-
-		DELETE FIELD OutputLocalEnvironment.Destination.MQ;
-
-		SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
-
-		SET OutputRoot.Properties = InputRoot.Properties;
-
-		SET OutputRoot.HTTPResponseHeader."Content-Type" =
-			'application/json; charset=utf-8';
-
-		SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
-		SET OutputRoot.HTTPResponseHeader."X-Error-Code"     = errorCode;
-
-		CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
-
-		SET OutputRoot.JSON.Data.status        = 'FAILED';
-		SET OutputRoot.JSON.Data.correlationId = correlationId;
-		SET OutputRoot.JSON.Data.errorCode     = errorCode;
-		SET OutputRoot.JSON.Data.message       = errorMessage;
-		SET OutputRoot.JSON.Data.detail        = errorDetail;
-		SET OutputRoot.JSON.Data.httpStatus    = httpStatus;
-		SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
-
-		SET OutputRoot.JSON.Data.timestamp =
-			CAST(
-				CURRENT_GMTTIMESTAMP AS CHARACTER
-				FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z'''
-			);
-	END;
+        SET OutputRoot.JSON.Data.status        = 'FAILED';
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.errorCode     = errorCode;
+        SET OutputRoot.JSON.Data.message       = errorMessage;
+        SET OutputRoot.JSON.Data.detail        = errorDetail;
+        SET OutputRoot.JSON.Data.httpStatus    = httpStatus;
+        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.timestamp     =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+    END;
 
 END MODULE;
