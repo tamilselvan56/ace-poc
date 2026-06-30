@@ -11,16 +11,19 @@ CREATE COMPUTE MODULE AuditLog_ErrorHandler
         DELETE FIELD OutputLocalEnvironment.Destination.MQ;
 
         IF EXISTS(InputLocalEnvironment.Variable.correlationId[]) THEN
-            SET correlationId = CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
+            SET correlationId =
+                CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
         ELSE
-            SET correlationId = 'ACE-' || CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+            SET correlationId =
+                'ACE-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
         END IF;
 
         IF EXISTS(InputLocalEnvironment.Variable.auditId[]) THEN
             SET auditId = CAST(InputLocalEnvironment.Variable.auditId AS CHARACTER);
         END IF;
 
-        -- ── HTTP error response back to caller ────────────────────────────
+        -- ── Step 1: Build HTTP 500 response ───────────────────────────────
         DELETE FIELD OutputRoot.JSON;
         DELETE FIELD OutputRoot.XMLNSC;
         DELETE FIELD OutputRoot.MQMD;
@@ -28,8 +31,8 @@ CREATE COMPUTE MODULE AuditLog_ErrorHandler
         DELETE FIELD OutputRoot.HTTPInputHeader;
 
         SET OutputRoot.Properties = InputRoot.Properties;
-
         SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 500;
+
         SET OutputRoot.HTTPResponseHeader."Content-Type"     = 'application/json; charset=utf-8';
         SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
         SET OutputRoot.HTTPResponseHeader."X-Error-Code"     = 'ERR_AUD_500';
@@ -50,10 +53,44 @@ CREATE COMPUTE MODULE AuditLog_ErrorHandler
         SET OutputRoot.JSON.Data.timestamp     =
             CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
 
-        -- ✅ Signal RetryCompute to route to DLQ via LocalEnvironment
-        SET OutputLocalEnvironment.Variable.auditRoute = 'RETRY';
+        -- ✅ 'out' → HTTP Reply node (sends 500 back to Postman/caller)
+        PROPAGATE TO TERMINAL 'out' FINALIZE NONE DELETE NONE;
 
-        RETURN TRUE;
+        -- ── Step 2: Rebuild original audit message for DLQ routing ────────
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.MQMD;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+
+        SET OutputRoot.Properties       = InputRoot.Properties;
+        SET OutputRoot.MQMD.Format      = 'MQSTR';
+        SET OutputRoot.MQMD.Persistence = 1;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.auditId       = auditId;
+        SET OutputRoot.JSON.Data.correlationId = correlationId;
+        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.environment   = 'DEV';
+
+        IF EXISTS(InputRoot.JSON.Data.eventType[]) THEN
+            SET OutputRoot.JSON.Data.eventType    = CAST(InputRoot.JSON.Data.eventType    AS CHARACTER);
+            SET OutputRoot.JSON.Data.sourceSystem = CAST(InputRoot.JSON.Data.sourceSystem AS CHARACTER);
+            SET OutputRoot.JSON.Data.userId       = CAST(InputRoot.JSON.Data.userId       AS CHARACTER);
+            SET OutputRoot.JSON.Data.action       = CAST(InputRoot.JSON.Data.action       AS CHARACTER);
+            SET OutputRoot.JSON.Data.resourceId   = CAST(InputRoot.JSON.Data.resourceId   AS CHARACTER);
+            SET OutputRoot.JSON.Data.resourceType = CAST(InputRoot.JSON.Data.resourceType AS CHARACTER);
+        END IF;
+
+        SET OutputRoot.JSON.Data.retryCount    = 0;
+        SET OutputRoot.JSON.Data.maxRetryCount = 3;
+        SET OutputRoot.JSON.Data.retryStatus   = 'PENDING';
+
+        -- ✅ 'alternate' → AuditLog_RetryCompute (routes to DLQ)
+        PROPAGATE TO TERMINAL 'out1' FINALIZE NONE DELETE NONE;
+
+        RETURN FALSE;
     END;
 
 END MODULE;

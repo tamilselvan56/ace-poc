@@ -1,0 +1,186 @@
+
+
+CREATE COMPUTE MODULE AuditLog_AuthValidate
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE authHeader    CHARACTER '';
+        DECLARE token         CHARACTER '';
+        DECLARE clientId      CHARACTER '';
+        DECLARE scope         CHARACTER '';
+        DECLARE correlationId CHARACTER '';
+
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+
+        IF EXISTS(InputRoot.HTTPInputHeader."X-Correlation-ID"[]) THEN
+            SET correlationId =
+                CAST(InputRoot.HTTPInputHeader."X-Correlation-ID" AS CHARACTER);
+        ELSE
+            SET correlationId =
+                'ACE-' ||
+                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+        END IF;
+
+        -- ── Check Authorization header exists ─────────────────────────────
+        IF NOT EXISTS(InputRoot.HTTPInputHeader.Authorization[]) THEN
+            CALL BuildAuthError(
+                401, correlationId,
+                'missing_token',
+                'Authorization header is required.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        SET authHeader = CAST(InputRoot.HTTPInputHeader.Authorization AS CHARACTER);
+
+        -- ── Check Bearer format ───────────────────────────────────────────
+        IF NOT (LENGTH(authHeader) > 7
+            AND UPPER(LEFT(authHeader, 7)) = 'BEARER ') THEN
+            CALL BuildAuthError(
+                401, correlationId,
+                'invalid_token_format',
+                'Authorization header must be Bearer <token>.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        SET token = TRIM(SUBSTRING(authHeader FROM 8));
+
+        IF token = '' THEN
+            CALL BuildAuthError(
+                401, correlationId,
+                'missing_token',
+                'Bearer token is empty.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        -- ── Validate token ────────────────────────────────────────────────
+        IF NOT IsValidToken(token) THEN
+            CALL BuildAuthError(
+                401, correlationId,
+                'invalid_token',
+                'Token is invalid or expired.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        -- ── Extract client info ───────────────────────────────────────────
+        SET clientId = ExtractClientId(token);
+        SET scope    = ExtractScope(token);
+
+        -- ── Check scope ───────────────────────────────────────────────────
+        IF scope <> 'audit:write' THEN
+            CALL BuildAuthError(
+                403, correlationId,
+                'insufficient_scope',
+                'audit:write scope is required.'
+            );
+            RETURN TRUE;
+        END IF;
+
+        -- ── Store validated info in LocalEnvironment ──────────────────────
+        SET OutputLocalEnvironment.Variable.correlationId = correlationId;
+        SET OutputLocalEnvironment.Variable.clientId      = clientId;
+        SET OutputLocalEnvironment.Variable.scope         = scope;
+        SET OutputLocalEnvironment.Variable.authenticated = 'true';
+
+        SET OutputRoot = InputRoot;
+
+        RETURN TRUE;
+    END;
+
+    -- ── Token format: clientId.yyyyMMddHHmmssSSS.scope ────────────────────
+    -- Must contain exactly 2 dots and start with a known clientId
+
+    CREATE FUNCTION IsValidToken(IN token CHARACTER) RETURNS BOOLEAN
+    BEGIN
+        DECLARE dotCount INTEGER;
+        DECLARE i        INTEGER;
+        DECLARE clientId CHARACTER '';
+
+        SET dotCount = 0;
+        SET i        = 1;
+
+        WHILE i <= LENGTH(token) DO
+            IF SUBSTRING(token FROM i FOR 1) = '.' THEN
+                SET dotCount = dotCount + 1;
+            END IF;
+            SET i = i + 1;
+        END WHILE;
+
+        IF dotCount <> 2 THEN
+            RETURN FALSE;
+        END IF;
+
+        SET clientId = SUBSTRING(token FROM 1
+                        FOR POSITION('.' IN token) - 1);
+
+        IF clientId = 'ace-poc-client'    THEN RETURN TRUE; END IF;
+        IF clientId = 'jenkins-ci-client' THEN RETURN TRUE; END IF;
+
+        RETURN FALSE;
+    END;
+
+    CREATE FUNCTION ExtractClientId(IN token CHARACTER) RETURNS CHARACTER
+    BEGIN
+        RETURN SUBSTRING(token FROM 1
+                FOR POSITION('.' IN token) - 1);
+    END;
+
+    CREATE FUNCTION ExtractScope(IN token CHARACTER) RETURNS CHARACTER
+    BEGIN
+        DECLARE lastPos INTEGER;
+        DECLARE i       INTEGER;
+
+        SET lastPos = 0;
+        SET i       = 1;
+
+        -- Scan forward to find last dot position
+        WHILE i <= LENGTH(token) DO
+            IF SUBSTRING(token FROM i FOR 1) = '.' THEN
+                SET lastPos = i;
+            END IF;
+            SET i = i + 1;
+        END WHILE;
+
+        IF lastPos > 0 THEN
+            RETURN SUBSTRING(token FROM lastPos + 1);
+        END IF;
+
+        RETURN '';
+    END;
+
+    CREATE PROCEDURE BuildAuthError(
+        IN httpStatus    INTEGER,
+        IN correlationId CHARACTER,
+        IN errorCode     CHARACTER,
+        IN description   CHARACTER
+    )
+    BEGIN
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.MQMD;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
+
+        SET OutputRoot.HTTPResponseHeader."Content-Type"     =
+            'application/json; charset=utf-8';
+        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.status    = 'UNAUTHORIZED';
+        SET OutputRoot.JSON.Data.errorCode = errorCode;
+        SET OutputRoot.JSON.Data.message   = description;
+        SET OutputRoot.JSON.Data.httpStatus = httpStatus;
+        SET OutputRoot.JSON.Data.flowName  = 'AuditLogFlow';
+        SET OutputRoot.JSON.Data.timestamp =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER
+                 FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+    END;
+
+END MODULE;

@@ -1,0 +1,117 @@
+
+
+CREATE COMPUTE MODULE OAuthToken_Compute
+
+    CREATE FUNCTION Main() RETURNS BOOLEAN
+    BEGIN
+        DECLARE clientId     CHARACTER '';
+        DECLARE clientSecret CHARACTER '';
+        DECLARE grantType    CHARACTER '';
+        DECLARE scope        CHARACTER '';
+        DECLARE token        CHARACTER '';
+        DECLARE expiresIn    INTEGER;
+
+        SET OutputLocalEnvironment = InputLocalEnvironment;
+
+        -- ── Read request body ─────────────────────────────────────────────
+        SET grantType    = TRIM(COALESCE(CAST(InputRoot.JSON.Data.grant_type    AS CHARACTER), ''));
+        SET clientId     = TRIM(COALESCE(CAST(InputRoot.JSON.Data.client_id     AS CHARACTER), ''));
+        SET clientSecret = TRIM(COALESCE(CAST(InputRoot.JSON.Data.client_secret AS CHARACTER), ''));
+        SET scope        = TRIM(COALESCE(CAST(InputRoot.JSON.Data.scope         AS CHARACTER), ''));
+
+        -- ── Validate grant type ───────────────────────────────────────────
+        IF grantType <> 'client_credentials' THEN
+            CALL BuildErrorResponse(400, 'unsupported_grant_type', 'Only client_credentials grant type is supported.');
+            RETURN TRUE;
+        END IF;
+
+        -- ── Validate client credentials ───────────────────────────────────
+        -- Registered clients (in production use a DB or vault)
+        IF NOT IsValidClient(clientId, clientSecret) THEN
+            CALL BuildErrorResponse(401, 'invalid_client', 'Invalid client_id or client_secret.');
+            RETURN TRUE;
+        END IF;
+
+        -- ── Validate scope ────────────────────────────────────────────────
+        IF scope <> 'audit:write' AND scope <> 'audit:read' AND scope <> '' THEN
+            CALL BuildErrorResponse(400, 'invalid_scope', 'Supported scopes are audit:write and audit:read.');
+            RETURN TRUE;
+        END IF;
+
+        IF scope = '' THEN
+            SET scope = 'audit:write';
+        END IF;
+
+        SET expiresIn = 3600;
+
+        -- ── Generate token ────────────────────────────────────────────────
+        -- Simple opaque token: clientId + timestamp + scope encoded
+        SET token =
+            clientId || '.' ||
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS') ||
+            '.' || scope;
+
+        -- ── Build response ────────────────────────────────────────────────
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = 200;
+        SET OutputRoot.HTTPResponseHeader."Content-Type" = 'application/json; charset=utf-8';
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.token_type   = 'Bearer';
+        SET OutputRoot.JSON.Data.access_token = token;
+        SET OutputRoot.JSON.Data.expires_in   = expiresIn;
+        SET OutputRoot.JSON.Data.scope        = scope;
+        SET OutputRoot.JSON.Data.client_id    = clientId;
+        SET OutputRoot.JSON.Data.issued_at    =
+            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+
+        RETURN TRUE;
+    END;
+
+    CREATE FUNCTION IsValidClient(
+        IN clientId     CHARACTER,
+        IN clientSecret CHARACTER
+    ) RETURNS BOOLEAN
+    BEGIN
+        -- Registered client credentials
+        -- In production: query a database or ACE vault
+        IF clientId = 'ace-poc-client' AND clientSecret = 'ace-poc-secret-2024' THEN
+            RETURN TRUE;
+        END IF;
+        IF clientId = 'jenkins-ci-client' AND clientSecret = 'jenkins-ci-secret-2024' THEN
+            RETURN TRUE;
+        END IF;
+        RETURN FALSE;
+    END;
+
+    CREATE PROCEDURE BuildErrorResponse(
+        IN httpStatus  INTEGER,
+        IN errorCode   CHARACTER,
+        IN description CHARACTER
+    )
+    BEGIN
+        DELETE FIELD OutputRoot.JSON;
+        DELETE FIELD OutputRoot.XMLNSC;
+        DELETE FIELD OutputRoot.HTTPResponseHeader;
+        DELETE FIELD OutputRoot.HTTPInputHeader;
+        DELETE FIELD OutputRoot.MQMD;
+
+        SET OutputRoot.Properties = InputRoot.Properties;
+        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
+        SET OutputRoot.HTTPResponseHeader."Content-Type" = 'application/json; charset=utf-8';
+
+        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
+
+        SET OutputRoot.JSON.Data.error             = errorCode;
+        SET OutputRoot.JSON.Data.error_description = description;
+        SET OutputRoot.JSON.Data.httpStatus        = httpStatus;
+    END;
+
+END MODULE;
