@@ -119,126 +119,77 @@ pipeline {
             }
         }
 
-stage('Smoke Test - Audit Happy Path') {
-    steps {
-        echo 'Testing AuditLog valid payload - expect 202...'
-        bat '''
-            echo {"eventType":"SMOKE_TEST","sourceSystem":"JENKINS-CI","userId":"CI-USR-001","action":"CREATE","resourceId":"CI-RES-%BUILD_NUMBER%","resourceType":"TEST"} > audit_payload.json
-            curl -s ^
-                -X POST ^
-                -H "Content-Type: application/json" ^
-                -H "X-Correlation-ID: JENKINS-CI-%BUILD_NUMBER%" ^
-                -d @audit_payload.json ^
-                -o audit_response.json ^
-                -w "HTTP_STATUS:%%{http_code}" ^
-                http://%ACE_HOST%:%ACE_HTTP_PORT%/api/v1/audit/log
-            echo.
-            echo === Audit Log Response ===
-            type audit_response.json
-        '''
-    }
-}
-
-        stage('Smoke Test - Validation Error') {
-    steps {
-        echo 'Testing missing eventType - expect 400 ERR_AUD_002...'
-        bat '''
-            echo {"sourceSystem":"JENKINS-CI","userId":"CI-USR-001","action":"CREATE","resourceId":"CI-RES-001","resourceType":"TEST"} > validation_payload.json
-            curl -s ^
-                -X POST ^
-                -H "Content-Type: application/json" ^
-                -d @validation_payload.json ^
-                -o validation_response.json ^
-                -w "HTTP_STATUS:%%{http_code}" ^
-                http://%ACE_HOST%:%ACE_HTTP_PORT%/api/v1/audit/log
-            echo.
-            echo === Validation Error Response ===
-            type validation_response.json
-        '''
-    }
-}
-
-        stage('Smoke Test - DLQ Routing') {
-    steps {
-        echo 'Disabling main queue to force DLQ routing - expect 500...'
-        bat '''
-            call "%ACE_PROFILE%"
-            echo ALTER QLOCAL(ACE.POC.GENERAL.EVENTS) PUT(DISABLED) | runmqsc %MQ_QMGR%
-            ping -n 4 127.0.0.1 > nul
-
-            echo {"eventType":"DLQ_TEST","sourceSystem":"JENKINS-CI","userId":"CI-USR-001","action":"CREATE","resourceId":"DLQ-RES-001","resourceType":"TEST"} > dlq_payload.json
-            curl -s ^
-                -X POST ^
-                -H "Content-Type: application/json" ^
-                -d @dlq_payload.json ^
-                -o dlq_response.json ^
-                -w "HTTP_STATUS:%%{http_code}" ^
-                http://%ACE_HOST%:%ACE_HTTP_PORT%/api/v1/audit/log
-            echo.
-            echo === DLQ Response ===
-            type dlq_response.json
-
-            echo ALTER QLOCAL(ACE.POC.GENERAL.EVENTS) PUT(ENABLED) | runmqsc %MQ_QMGR%
-            echo.
-            echo === TRANSIENT DLQ depth after test ===
-            echo DISPLAY QLOCAL(DLQ.TRANSIENT.ACE.POC) CURDEPTH | runmqsc %MQ_QMGR%
-        '''
-    }
-}
-
-        // ── Stage 12: Post Deploy Queue Report ───────────────────────────
-        stage('Post Deploy - Queue Report') {
+        // ── Stage 9: Smoke Test - Audit Happy Path ────────────────────────
+        stage('Smoke Test - Audit Happy Path') {
             steps {
-                echo 'Final queue depth report...'
+                echo 'Testing AuditLog valid payload - expect 202...'
                 bat '''
-                    call "%ACE_PROFILE%"
-                    echo ===== FINAL QUEUE DEPTH REPORT =====
-                    echo DISPLAY QLOCAL(ACE.POC.GENERAL.EVENTS) CURDEPTH | runmqsc %MQ_QMGR%
-                    echo DISPLAY QLOCAL(DLQ.TRANSIENT.ACE.POC)  CURDEPTH | runmqsc %MQ_QMGR%
-                    echo DISPLAY QLOCAL(DLQ.PERMANENT.ACE.POC)  CURDEPTH | runmqsc %MQ_QMGR%
-                    echo =====================================
+                    echo {"eventType":"SMOKE_TEST","sourceSystem":"JENKINS-CI","userId":"CI-USR-001","action":"CREATE","resourceId":"CI-RES-%BUILD_NUMBER%","resourceType":"TEST"} > audit_payload.json
+                    curl -s ^
+                        -X POST ^
+                        -H "Content-Type: application/json" ^
+                        -H "X-Correlation-ID: JENKINS-CI-%BUILD_NUMBER%" ^
+                        -d @audit_payload.json ^
+                        -o audit_response.json ^
+                        -w "HTTP_STATUS:%%{http_code}" ^
+                        http://%ACE_HOST%:%ACE_HTTP_PORT%/api/v1/audit/log
+                    echo.
+                    echo === Audit Log Response ===
+                    type audit_response.json
                 '''
             }
         }
 
-    }
-
-    // ── Post Actions ──────────────────────────────────────────────────────
-    post {
-        success {
-            archiveArtifacts artifacts: [
-                'bars/*.bar',
-                'health_response.json',
-                'audit_response.json',
-                'validation_response.json',
-                'dlq_response.json',
-                'server_status.json'
-            ].join(','), allowEmptyArchive: true, fingerprint: true
-
-            echo '''
-            =========================================
-             ACE POC PIPELINE - SUCCESS
-            =========================================
-             BAR packaged, deployed and smoke tested.
-             All flows verified on ACEPOCSERVER.
-            =========================================
-            '''
+        // ── Stage 10: Smoke Test - Validation Error ───────────────────────
+        stage('Smoke Test - Validation Error') {
+            steps {
+                echo 'Testing missing eventType - expect 400 ERR_AUD_002...'
+                bat '''
+                    echo {"sourceSystem":"JENKINS-CI","userId":"CI-USR-001","action":"CREATE","resourceId":"CI-RES-001","resourceType":"TEST"} > validation_payload.json
+                    curl -s ^
+                        -X POST ^
+                        -H "Content-Type: application/json" ^
+                        -d @validation_payload.json ^
+                        -o validation_response.json ^
+                        -w "HTTP_STATUS:%%{http_code}" ^
+                        http://%ACE_HOST%:%ACE_HTTP_PORT%/api/v1/audit/log
+                    echo.
+                    echo === Validation Error Response ===
+                    type validation_response.json
+                '''
+            }
         }
-        failure {
-            echo 'Pipeline failed. Check the Console Output for BIP error codes.'
-            bat '''
-                call "C:\\Program Files\\IBM\\ACE\\13.0.7.0\\server\\bin\\mqsiprofile.cmd"
-                echo Restoring MQ queue after failure...
-                echo ALTER QLOCAL(ACE.POC.GENERAL.EVENTS) PUT(ENABLED) | runmqsc ACEPOCQM
-            '''
-        }
-        always {
-            echo "Build #${BUILD_NUMBER} finished. Check Artifacts tab for response files."
-        }
-    }
-}
 
-// ── Stage 12: Smoke Test - OAuth Token Generation ────────────────
+        // ── Stage 11: Smoke Test - DLQ Routing ───────────────────────────
+        stage('Smoke Test - DLQ Routing') {
+            steps {
+                echo 'Disabling main queue to force DLQ routing - expect 500...'
+                bat '''
+                    call "%ACE_PROFILE%"
+                    echo ALTER QLOCAL(ACE.POC.GENERAL.EVENTS) PUT(DISABLED) | runmqsc %MQ_QMGR%
+                    ping -n 4 127.0.0.1 > nul
+
+                    echo {"eventType":"DLQ_TEST","sourceSystem":"JENKINS-CI","userId":"CI-USR-001","action":"CREATE","resourceId":"DLQ-RES-001","resourceType":"TEST"} > dlq_payload.json
+                    curl -s ^
+                        -X POST ^
+                        -H "Content-Type: application/json" ^
+                        -d @dlq_payload.json ^
+                        -o dlq_response.json ^
+                        -w "HTTP_STATUS:%%{http_code}" ^
+                        http://%ACE_HOST%:%ACE_HTTP_PORT%/api/v1/audit/log
+                    echo.
+                    echo === DLQ Response ===
+                    type dlq_response.json
+
+                    echo ALTER QLOCAL(ACE.POC.GENERAL.EVENTS) PUT(ENABLED) | runmqsc %MQ_QMGR%
+                    echo.
+                    echo === TRANSIENT DLQ depth after test ===
+                    echo DISPLAY QLOCAL(DLQ.TRANSIENT.ACE.POC) CURDEPTH | runmqsc %MQ_QMGR%
+                '''
+            }
+        }
+
+        // ── Stage 12: Smoke Test - OAuth Token Generation ────────────────
         stage('Smoke Test - OAuth Token') {
             steps {
                 echo 'Testing OAuth2 token generation - expect 200...'
@@ -356,3 +307,60 @@ stage('Smoke Test - Audit Happy Path') {
                 '''
             }
         }
+
+        // ── Stage 18: Post Deploy Queue Report ───────────────────────────
+        stage('Post Deploy - Queue Report') {
+            steps {
+                echo 'Final queue depth report...'
+                bat '''
+                    call "%ACE_PROFILE%"
+                    echo ===== FINAL QUEUE DEPTH REPORT =====
+                    echo DISPLAY QLOCAL(ACE.POC.GENERAL.EVENTS) CURDEPTH | runmqsc %MQ_QMGR%
+                    echo DISPLAY QLOCAL(DLQ.TRANSIENT.ACE.POC)  CURDEPTH | runmqsc %MQ_QMGR%
+                    echo DISPLAY QLOCAL(DLQ.PERMANENT.ACE.POC)  CURDEPTH | runmqsc %MQ_QMGR%
+                    echo =====================================
+                '''
+            }
+        }
+
+    }
+
+    // ── Post Actions ──────────────────────────────────────────────────────
+    post {
+        success {
+            archiveArtifacts artifacts: [
+                'bars/*.bar',
+                'health_response.json',
+                'audit_response.json',
+                'validation_response.json',
+                'dlq_response.json',
+                'server_status.json',
+                'oauth_token_response.json',
+                'no_token_response.json',
+                'invalid_token_response.json',
+                'authenticated_response.json',
+                'rate_limit_response_*.json'
+            ].join(','), allowEmptyArchive: true, fingerprint: true
+
+            echo '''
+            =========================================
+             ACE POC PIPELINE - SUCCESS
+            =========================================
+             BAR packaged, deployed and smoke tested.
+             Auth, retry, DLQ and rate limit verified.
+            =========================================
+            '''
+        }
+        failure {
+            echo 'Pipeline failed. Check the Console Output for BIP error codes.'
+            bat '''
+                call "C:\\Program Files\\IBM\\ACE\\13.0.7.0\\server\\bin\\mqsiprofile.cmd"
+                echo Restoring MQ queue after failure...
+                echo ALTER QLOCAL(ACE.POC.GENERAL.EVENTS) PUT(ENABLED) | runmqsc ACEPOCQM
+            '''
+        }
+        always {
+            echo "Build #${BUILD_NUMBER} finished. Check Artifacts tab for response files."
+        }
+    }
+}
