@@ -1,93 +1,105 @@
 
 
+
+
 CREATE COMPUTE MODULE AuditLog_RateLimit
 
-    CREATE FUNCTION Main() RETURNS BOOLEAN
-    BEGIN
-        DECLARE clientId      CHARACTER '';
-        DECLARE correlationId CHARACTER '';
-        DECLARE requestCount  INTEGER;
-        DECLARE maxRequests   INTEGER;
+	CREATE FUNCTION Main() RETURNS BOOLEAN
+	BEGIN
+		DECLARE clientId CHARACTER '';
+		DECLARE correlationId CHARACTER '';
+		DECLARE requestCount INTEGER;
+		DECLARE maxRequests INTEGER;
+		-- ── Skip rate limit check if auth already failed ──────────────────────
+		IF EXISTS(InputLocalEnvironment.Variable.authenticated[]) THEN
+			IF CAST(InputLocalEnvironment.Variable.authenticated AS CHARACTER) <> 'true' THEN
+				SET OutputRoot = InputRoot;
+				SET OutputLocalEnvironment = InputLocalEnvironment;
+				RETURN TRUE;
+			END IF;
+		ELSE
+			-- authenticated flag missing means AuthValidate failed before setting it
+			SET OutputRoot = InputRoot;
+			SET OutputLocalEnvironment = InputLocalEnvironment;
+			RETURN TRUE;
+		END IF;
 
-        SET OutputLocalEnvironment = InputLocalEnvironment;
+		SET OutputLocalEnvironment = InputLocalEnvironment;
 
-        SET maxRequests = 10;
+		SET maxRequests = 10;
 
-        IF EXISTS(InputLocalEnvironment.Variable.clientId[]) THEN
-            SET clientId = CAST(InputLocalEnvironment.Variable.clientId AS CHARACTER);
-        ELSE
-            SET clientId = 'unknown';
-        END IF;
+		IF EXISTS(InputLocalEnvironment.Variable.clientId[]) THEN
+			SET clientId = CAST(InputLocalEnvironment.Variable.clientId AS CHARACTER);
+		ELSE
+			SET clientId = 'unknown';
+		END IF;
 
-        IF EXISTS(InputLocalEnvironment.Variable.correlationId[]) THEN
-            SET correlationId = CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
-        ELSE
-            SET correlationId =
-                'ACE-' ||
-                CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
-        END IF;
+		IF EXISTS(InputLocalEnvironment.Variable.correlationId[]) THEN
+			SET correlationId = CAST(InputLocalEnvironment.Variable.correlationId AS CHARACTER);
+		ELSE
+			SET correlationId =
+			'ACE-' ||
+			CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyyMMddHHmmssSSS');
+		END IF;
+		-- ── Read current request count from shared variable ───────────────
+		-- In production use ACE Global Cache or MQ for distributed counting
+		IF EXISTS(InputLocalEnvironment.Variable.requestCount[]) THEN
+			SET requestCount = CAST(InputLocalEnvironment.Variable.requestCount AS INTEGER);
+		ELSE
+			SET requestCount = 0;
+		END IF;
 
-        -- ── Read current request count from shared variable ───────────────
-        -- In production use ACE Global Cache or MQ for distributed counting
-        IF EXISTS(InputLocalEnvironment.Variable.requestCount[]) THEN
-            SET requestCount = CAST(InputLocalEnvironment.Variable.requestCount AS INTEGER);
-        ELSE
-            SET requestCount = 0;
-        END IF;
+		SET requestCount = requestCount + 1;
+		-- ── Check rate limit ──────────────────────────────────────────────
+		IF requestCount > maxRequests THEN
+			CALL BuildRateLimitError(429, correlationId, clientId, requestCount, maxRequests);
+			RETURN TRUE;
+		END IF;
+		-- ── Update count and pass through ─────────────────────────────────
+		SET OutputLocalEnvironment.Variable.requestCount = requestCount;
+		SET OutputLocalEnvironment.Variable.clientId = clientId;
+		SET OutputRoot = InputRoot;
 
-        SET requestCount = requestCount + 1;
+		RETURN TRUE;
+	END;
 
-        -- ── Check rate limit ──────────────────────────────────────────────
-        IF requestCount > maxRequests THEN
-            CALL BuildRateLimitError(429, correlationId, clientId, requestCount, maxRequests);
-            RETURN TRUE;
-        END IF;
+	CREATE PROCEDURE BuildRateLimitError(
+	IN httpStatus INTEGER,
+	IN correlationId CHARACTER,
+	IN clientId CHARACTER,
+	IN requestCount INTEGER,
+	IN maxRequests INTEGER
+	)
+	BEGIN
+		DELETE FIELD OutputRoot.JSON;
+		DELETE FIELD OutputRoot.XMLNSC;
+		DELETE FIELD OutputRoot.MQMD;
+		DELETE FIELD OutputRoot.HTTPResponseHeader;
+		DELETE FIELD OutputRoot.HTTPInputHeader;
 
-        -- ── Update count and pass through ─────────────────────────────────
-        SET OutputLocalEnvironment.Variable.requestCount = requestCount;
-        SET OutputLocalEnvironment.Variable.clientId     = clientId;
-        SET OutputRoot = InputRoot;
+		SET OutputRoot.Properties = InputRoot.Properties;
+		SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
 
-        RETURN TRUE;
-    END;
+		SET OutputRoot.HTTPResponseHeader."Content-Type" = 'application/json; charset=utf-8';
+		SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
+		SET OutputRoot.HTTPResponseHeader."X-RateLimit-Limit" = CAST(maxRequests AS CHARACTER);
+		SET OutputRoot.HTTPResponseHeader."X-RateLimit-Remaining" = '0';
 
-    CREATE PROCEDURE BuildRateLimitError(
-        IN httpStatus  INTEGER,
-        IN correlationId CHARACTER,
-        IN clientId    CHARACTER,
-        IN requestCount INTEGER,
-        IN maxRequests INTEGER
-    )
-    BEGIN
-        DELETE FIELD OutputRoot.JSON;
-        DELETE FIELD OutputRoot.XMLNSC;
-        DELETE FIELD OutputRoot.MQMD;
-        DELETE FIELD OutputRoot.HTTPResponseHeader;
-        DELETE FIELD OutputRoot.HTTPInputHeader;
+		CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
 
-        SET OutputRoot.Properties = InputRoot.Properties;
-        SET OutputLocalEnvironment.Destination.HTTP.ReplyStatusCode = httpStatus;
-
-        SET OutputRoot.HTTPResponseHeader."Content-Type"     = 'application/json; charset=utf-8';
-        SET OutputRoot.HTTPResponseHeader."X-Correlation-ID" = correlationId;
-        SET OutputRoot.HTTPResponseHeader."X-RateLimit-Limit"     = CAST(maxRequests  AS CHARACTER);
-        SET OutputRoot.HTTPResponseHeader."X-RateLimit-Remaining" = '0';
-
-        CREATE LASTCHILD OF OutputRoot DOMAIN('JSON');
-
-        SET OutputRoot.JSON.Data.status        = 'RATE_LIMITED';
-        SET OutputRoot.JSON.Data.errorCode     = 'ERR_RATE_001';
-        SET OutputRoot.JSON.Data.message       = 'Rate limit exceeded';
-        SET OutputRoot.JSON.Data.detail        =
-            'Maximum ' ||
-            CAST(maxRequests AS CHARACTER) ||
-            ' requests allowed per session for client: ' || clientId;
-        SET OutputRoot.JSON.Data.httpStatus    = httpStatus;
-        SET OutputRoot.JSON.Data.requestCount  = requestCount;
-        SET OutputRoot.JSON.Data.maxRequests   = maxRequests;
-        SET OutputRoot.JSON.Data.flowName      = 'AuditLogFlow';
-        SET OutputRoot.JSON.Data.timestamp     =
-            CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
-    END;
+		SET OutputRoot.JSON.Data.status = 'RATE_LIMITED';
+		SET OutputRoot.JSON.Data.errorCode = 'ERR_RATE_001';
+		SET OutputRoot.JSON.Data.message = 'Rate limit exceeded';
+		SET OutputRoot.JSON.Data.detail =
+		'Maximum ' ||
+		CAST(maxRequests AS CHARACTER) ||
+		' requests allowed per session for client: ' || clientId;
+		SET OutputRoot.JSON.Data.httpStatus = httpStatus;
+		SET OutputRoot.JSON.Data.requestCount = requestCount;
+		SET OutputRoot.JSON.Data.maxRequests = maxRequests;
+		SET OutputRoot.JSON.Data.flowName = 'AuditLogFlow';
+		SET OutputRoot.JSON.Data.timestamp =
+		CAST(CURRENT_GMTTIMESTAMP AS CHARACTER FORMAT 'yyyy-MM-dd''T''HH:mm:ss.SSS''Z''');
+	END;
 
 END MODULE;
