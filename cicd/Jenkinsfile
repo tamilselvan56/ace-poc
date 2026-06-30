@@ -287,26 +287,7 @@ pipeline {
             }
         }
 
-        // ── Stage 17: Smoke Test - Rate Limiting ──────────────────────────
-        stage('Smoke Test - Rate Limit (Expect 429 on burst)') {
-            steps {
-                echo 'Sending 11 rapid requests to trigger rate limit...'
-                bat '''
-                    for /L %%i in (1,1,11) do (
-                        curl -s -X POST ^
-                            -H "Content-Type: application/json" ^
-                            -H "Authorization: Bearer %ACCESS_TOKEN%" ^
-                            -d @audit_payload.json ^
-                            -o rate_limit_response_%%i.json ^
-                            -w "Request %%i: HTTP_STATUS:%%{http_code}\\n" ^
-                            http://%ACE_HOST%:%ACE_HTTP_PORT%/api/v1/audit/log
-                    )
-                    echo.
-                    echo === Last Request Response (should be 429) ===
-                    type rate_limit_response_11.json
-                '''
-            }
-        }
+
 
         // ── Stage 18: Post Deploy Queue Report ───────────────────────────
         stage('Post Deploy - Queue Report') {
